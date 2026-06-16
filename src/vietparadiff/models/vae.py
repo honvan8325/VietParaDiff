@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint_sequential
 
 from .common import ResidualBlock, group_norm
 from .style import haar_highpass
@@ -25,10 +26,17 @@ class DiagonalGaussian:
 
 
 class Encoder(nn.Module):
-    """Residual CNN encoder that downsamples images by 8x."""
+    """Residual CNN encoder that downsamples images by 8x.
 
-    def __init__(self, in_ch: int, latent_ch: int, base: int) -> None:
+    The encoder supports activation checkpointing because paragraph canvases can
+    be 1024 px wide and up to 1536 px tall.  Checkpointing recomputes internal
+    activations during backward instead of storing every full-resolution feature
+    map, which is the correct trade-off for paper-scale dynamic canvases.
+    """
+
+    def __init__(self, in_ch: int, latent_ch: int, base: int, gradient_checkpointing: bool = True) -> None:
         super().__init__()
+        self.gradient_checkpointing = gradient_checkpointing
         self.net = nn.Sequential(
             nn.Conv2d(in_ch, base, 3, padding=1), nn.SiLU(), ResidualBlock(base),
             nn.Conv2d(base, base * 2, 4, stride=2, padding=1), nn.SiLU(), ResidualBlock(base * 2),
@@ -38,16 +46,21 @@ class Encoder(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> DiagonalGaussian:
-        return DiagonalGaussian(self.net(x))
+        if self.training and self.gradient_checkpointing and x.requires_grad:
+            stats = checkpoint_sequential(self.net, segments=6, input=x, use_reentrant=False)
+        else:
+            stats = self.net(x)
+        return DiagonalGaussian(stats)
 
 
 class DualBandVAE(nn.Module):
     """VAE with low-frequency and high-frequency latent posteriors."""
 
-    def __init__(self, in_ch: int = 1, latent_ch: int = 8, base: int = 128) -> None:
+    def __init__(self, in_ch: int = 1, latent_ch: int = 8, base: int = 128, gradient_checkpointing: bool = True) -> None:
         super().__init__()
-        self.low_encoder = Encoder(in_ch, latent_ch, base)
-        self.high_encoder = Encoder(in_ch, latent_ch, base)
+        self.gradient_checkpointing = gradient_checkpointing
+        self.low_encoder = Encoder(in_ch, latent_ch, base, gradient_checkpointing)
+        self.high_encoder = Encoder(in_ch, latent_ch, base, gradient_checkpointing)
         self.decoder = nn.Sequential(
             nn.Conv2d(latent_ch * 2, base * 4, 3, padding=1), nn.SiLU(), ResidualBlock(base * 4),
             nn.ConvTranspose2d(base * 4, base * 4, 4, stride=2, padding=1), nn.SiLU(), ResidualBlock(base * 4),
@@ -60,7 +73,10 @@ class DualBandVAE(nn.Module):
         return {"low": self.low_encoder(x), "high": self.high_encoder(haar_highpass(x))}
 
     def decode(self, low_z: torch.Tensor, high_z: torch.Tensor) -> torch.Tensor:
-        return self.decoder(torch.cat([low_z, high_z], dim=1))
+        z = torch.cat([low_z, high_z], dim=1)
+        if self.training and self.gradient_checkpointing and z.requires_grad:
+            return checkpoint_sequential(self.decoder, segments=6, input=z, use_reentrant=False)
+        return self.decoder(z)
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor | DiagonalGaussian]:
         posts = self.encode(x)

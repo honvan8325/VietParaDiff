@@ -51,7 +51,7 @@ class VietParaDiff(nn.Module):
             pooled_grid=cfg["style"].get("pooled_grid", [8, 32]),
         )
         self.layout = AutoregressiveLayoutPlanner(dim, cfg["layout"]["hidden_dim"], cfg["layout"]["fields"])
-        self.vae = DualBandVAE(cfg["image"]["channels"], cfg["vae"]["latent_channels"], cfg["vae"]["base_channels"])
+        self.vae = DualBandVAE(cfg["image"]["channels"], cfg["vae"]["latent_channels"], cfg["vae"]["base_channels"], cfg["vae"].get("gradient_checkpointing", True))
         self.htr = LineHTR(vocab, cfg["htr"]["hidden_dim"])
         self.topology = DiacriticTopologyDetector(cfg["image"]["channels"], cfg.get("topology", {}).get("base_channels", 96))
         self.unet = ConditionalUNet(

@@ -10,6 +10,7 @@ from vietparadiff.data.archetypes import ArchetypeRenderer
 from vietparadiff.data.collate import paragraph_collate
 from vietparadiff.data.dataset import ParagraphDataset
 from vietparadiff.data.graphemes import VietnameseTokenizer
+from vietparadiff.data.sampler import PixelBudgetBatchSampler
 from vietparadiff.models.pipeline import VietParaDiff
 from vietparadiff.training.checkpoint import load_modules_from_checkpoint
 from vietparadiff.training.trainer import Trainer
@@ -78,14 +79,32 @@ def main() -> None:
     tokenizer = VietnameseTokenizer(max_tokens=cfg["text"]["max_tokens"])
     renderer = ArchetypeRenderer(size=cfg["text"]["archetype_size"], font_path=args.archetype_font)
     dataset = ParagraphDataset(args.manifest, args.root, tokenizer, renderer, cfg["image"]["height"], cfg["image"]["width"])
-    loader = DataLoader(
-        dataset,
-        batch_size=cfg["training"]["batch_size"],
-        shuffle=True,
-        num_workers=cfg["training"].get("num_workers", 0),
-        pin_memory=(device.type == "cuda"),
-        collate_fn=paragraph_collate,
-    )
+    max_pixels = int(cfg["training"].get("max_pixels_per_batch", 0) or 0)
+    if max_pixels > 0:
+        sampler = PixelBudgetBatchSampler(
+            dataset.rows,
+            max_batch_size=int(cfg["training"]["batch_size"]),
+            max_pixels=max_pixels,
+            shuffle=True,
+            seed=int(cfg.get("seed", 2026)),
+        )
+        loader = DataLoader(
+            dataset,
+            batch_sampler=sampler,
+            num_workers=cfg["training"].get("num_workers", 0),
+            pin_memory=(device.type == "cuda"),
+            collate_fn=paragraph_collate,
+        )
+        print(f"using pixel-budget batches: max_batch_size={cfg['training']['batch_size']} max_pixels={max_pixels}")
+    else:
+        loader = DataLoader(
+            dataset,
+            batch_size=cfg["training"]["batch_size"],
+            shuffle=True,
+            num_workers=cfg["training"].get("num_workers", 0),
+            pin_memory=(device.type == "cuda"),
+            collate_fn=paragraph_collate,
+        )
 
     model = VietParaDiff(cfg, tokenizer)
     if args.resume:
