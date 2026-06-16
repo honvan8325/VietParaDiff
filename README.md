@@ -122,3 +122,32 @@ uv run vpd-train --config configs/base.yaml --stage diffusion \
   --root data/synthetic_paper_v1 --font-dir fonts --device cuda \
   --resume runs/vietparadiff/diffusion/latest.pt
 ```
+
+
+## Font layout
+
+VietParaDiff now separates the two font roles explicitly:
+
+```text
+fonts/synthetic/   # many fonts used only by vpd-synthetic
+fonts/gnu/         # exactly one GNU/Unicode font used by train/infer archetypes
+```
+
+Download both folders:
+
+```bash
+uv run vpd-download-fonts --output fonts
+```
+
+Generate synthetic data with many style fonts:
+
+```bash
+uv run vpd-synthetic --font-dir fonts/synthetic ...
+```
+
+Train/infer with one stable archetype font:
+
+```bash
+uv run vpd-train --archetype-font fonts/gnu/unifont-15.1.05.otf ...
+uv run vpd-infer --archetype-font fonts/gnu/unifont-15.1.05.otf ...
+```

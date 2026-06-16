@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 import torch
 
-from .fonts import list_project_fonts, validate_font
+from .fonts import default_archetype_font, validate_font
 from .graphemes import GraphemeParts, NONE, NEWLINE, SPACE
 
 MODIFIER_GLYPHS = {"breve": "˘", "circumflex": "ˆ", "horn": "̛", "stroke": "đ", NONE: ""}
@@ -21,20 +21,16 @@ TONE_GLYPHS = {"acute": "´", "grave": "`", "hook": "̉", "tilde": "˜", "dot": 
 
 
 class ArchetypeRenderer:
-    """Render grapheme archetypes as normalized tensors."""
+    """Render grapheme archetypes as normalized tensors.
 
-    def __init__(self, size: int = 48, font_path: str | Path | None = None, font_dir: str | Path | None = None) -> None:
+    The renderer uses exactly one explicit GNU/Unicode archetype font.  It never
+    scans the synthetic font directory, because synthetic fonts are style sources
+    while archetype glyphs are stable content-conditioning symbols.
+    """
+
+    def __init__(self, size: int = 48, font_path: str | Path | None = None) -> None:
         self.size = int(size)
-        if font_path:
-            self.font_path = validate_font(font_path)
-        else:
-            fonts = list_project_fonts(font_dir)
-            if not fonts:
-                raise RuntimeError(
-                    "No Vietnamese-capable fonts found. Put .ttf/.otf files in fonts/ or pass --font-dir. "
-                    "System font discovery is intentionally disabled."
-                )
-            self.font_path = fonts[0]
+        self.font_path = validate_font(font_path) if font_path else default_archetype_font()
         self.font = ImageFont.truetype(str(self.font_path), max(12, int(size * 0.72)))
         self.small = ImageFont.truetype(str(self.font_path), max(10, int(size * 0.48)))
 

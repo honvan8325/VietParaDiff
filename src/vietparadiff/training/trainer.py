@@ -79,7 +79,8 @@ class Trainer:
             lr=float(self.cfg["training"]["lr"]),
             weight_decay=float(self.cfg["training"].get("weight_decay", 0.0)),
         )
-        scaler = torch.cuda.amp.GradScaler(enabled=bool(self.cfg["training"].get("amp", True)) and self.device.type == "cuda")
+        amp_enabled = bool(self.cfg["training"].get("amp", True)) and self.device.type == "cuda"
+        scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
         accum = int(self.cfg["training"].get("grad_accum_steps", 1))
         max_steps = int(max_steps or self.cfg["training"]["max_steps"])
         save_every = int(self.cfg["training"].get("checkpoint_every_steps", 1000))
@@ -105,7 +106,7 @@ class Trainer:
         while global_step < max_steps:
             for batch in loader:
                 batch = move_batch(batch, self.device)
-                with torch.cuda.amp.autocast(enabled=scaler.is_enabled()):
+                with torch.amp.autocast("cuda", enabled=scaler.is_enabled()):
                     losses = forward_stage(self.model, batch, stage, global_step)
                     loss = losses["loss"] / accum
                 scaler.scale(loss).backward()

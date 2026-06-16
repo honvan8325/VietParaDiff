@@ -45,7 +45,7 @@ class FactorizedStyleEncoder(nn.Module):
             nn.Conv2d(base_channels * 4, dim, 3, padding=1), nn.SiLU(), group_norm(dim),
         )
         enc_layer = nn.TransformerEncoderLayer(dim, heads, dim * 4, batch_first=True, norm_first=True, activation="gelu")
-        self.spatial_transformer = nn.TransformerEncoder(enc_layer, transformer_layers)
+        self.spatial_transformer = nn.TransformerEncoder(enc_layer, transformer_layers, enable_nested_tensor=False)
         self.global_queries = nn.Parameter(torch.randn(tokens_per_group, dim) * 0.02)
         self.layout_queries = nn.Parameter(torch.randn(tokens_per_group, dim) * 0.02)
         self.stroke_queries = nn.Parameter(torch.randn(tokens_per_group, dim) * 0.02)

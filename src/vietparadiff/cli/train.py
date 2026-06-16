@@ -57,7 +57,7 @@ def main() -> None:
     parser.add_argument("--stage", choices=["vae", "htr", "style_layout", "topology", "diffusion"], required=True)
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--root", required=True)
-    parser.add_argument("--font-dir", default="fonts")
+    parser.add_argument("--archetype-font", default=None, help="Single GNU/Unicode font for grapheme archetypes, e.g. fonts/gnu/unifont.otf")
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--resume", default=None, help="Full same-stage checkpoint to resume model, optimizer, scaler, and step")
@@ -76,7 +76,7 @@ def main() -> None:
     device = choose_device(args.device)
 
     tokenizer = VietnameseTokenizer(max_tokens=cfg["text"]["max_tokens"])
-    renderer = ArchetypeRenderer(size=cfg["text"]["archetype_size"], font_dir=args.font_dir)
+    renderer = ArchetypeRenderer(size=cfg["text"]["archetype_size"], font_path=args.archetype_font)
     dataset = ParagraphDataset(args.manifest, args.root, tokenizer, renderer, cfg["image"]["height"], cfg["image"]["width"])
     loader = DataLoader(
         dataset,

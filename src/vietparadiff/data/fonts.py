@@ -29,13 +29,38 @@ class FontValidationError(RuntimeError):
 def project_font_dir() -> Path:
     """Return the repository-local `fonts` directory for an installed checkout."""
 
-    # src/vietparadiff/data/fonts.py -> repo root is parents[4] in editable tree.
+    # src/vietparadiff/data/fonts.py -> repo root is found by walking upward.
     here = Path(__file__).resolve()
     for parent in [*here.parents]:
         candidate = parent / "fonts"
         if candidate.exists():
             return candidate
     return Path.cwd() / "fonts"
+
+
+def default_synthetic_font_dir() -> Path:
+    """Return the canonical folder containing many fonts for synthetic rendering."""
+
+    return project_font_dir() / "synthetic"
+
+
+def default_archetype_font() -> Path:
+    """Return the canonical single GNU/Unicode font used for grapheme archetypes.
+
+    The training and inference CLIs use one explicit archetype font instead of
+    scanning the synthetic font folder.  This keeps content archetypes stable even
+    when the synthetic renderer uses hundreds of font families.
+    """
+
+    gnu_dir = project_font_dir() / "gnu"
+    candidates = sorted([*gnu_dir.glob("*.ttf"), *gnu_dir.glob("*.otf"), *gnu_dir.glob("*.ttc")])
+    if len(candidates) != 1:
+        raise FontValidationError(
+            f"Expected exactly one archetype font in {gnu_dir}, found {len(candidates)}. "
+            "Run `uv run vpd-download-fonts --output fonts` or pass "
+            "`--archetype-font fonts/gnu/<font>.ttf`."
+        )
+    return validate_font(candidates[0])
 
 
 def font_coverage(path: str | Path, required_text: str = REQUIRED_TEXT) -> tuple[float, list[str]]:
@@ -68,13 +93,15 @@ def validate_font(path: str | Path, required_text: str = REQUIRED_TEXT) -> Path:
 
 
 def list_project_fonts(font_dir: str | Path | None = None, required_text: str = REQUIRED_TEXT) -> list[Path]:
-    """List valid fonts from a project-local directory only.
+    """List valid synthetic-rendering fonts from a project-local directory only.
 
-    No system font discovery is performed.  This is intentional to keep
-    synthetic datasets reproducible across machines.
+    This function is for synthetic data generation.  It intentionally does not
+    scan system directories and it should not be used by the training content
+    encoder.  Training uses one explicit GNU/Unicode archetype font via
+    :func:`default_archetype_font` or ``--archetype-font``.
     """
 
-    root = Path(font_dir) if font_dir else project_font_dir()
+    root = Path(font_dir) if font_dir else default_synthetic_font_dir()
     if not root.exists():
         return []
     candidates = sorted([*root.glob("*.ttf"), *root.glob("*.otf"), *root.glob("*.ttc")])

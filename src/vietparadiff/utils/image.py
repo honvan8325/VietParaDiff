@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image
+import numpy as np
 import torch
 
 
@@ -50,10 +51,10 @@ def transform_box(box: list[float] | tuple[float, float, float, float], info: Fi
 
 
 def pil_to_tensor(image: Image.Image) -> torch.Tensor:
-    """Convert PIL grayscale image to a float tensor in [-1, 1]."""
+    """Convert PIL grayscale image to a float tensor in [-1, 1] without TypedStorage."""
 
-    data = torch.ByteTensor(torch.ByteStorage.from_buffer(image.tobytes()))
-    data = data.float().view(image.height, image.width) / 255.0
+    arr = np.asarray(image, dtype=np.uint8).copy()
+    data = torch.from_numpy(arr).float() / 255.0
     return data.unsqueeze(0) * 2.0 - 1.0
 
 

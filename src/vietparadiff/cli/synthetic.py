@@ -41,7 +41,7 @@ def main() -> None:
     parser.add_argument("--max-sentences", type=int, default=6)
     parser.add_argument("--corpus", default=None, help="Optional UTF-8 text file, one sentence per line")
     parser.add_argument("--lexicon", default=None, help="Optional JSON lexicon overriding the built-in corpus generator")
-    parser.add_argument("--font-dir", default="fonts", help="Directory containing .ttf/.otf fonts; system fonts are not searched")
+    parser.add_argument("--font-dir", "--synthetic-font-dir", default="fonts/synthetic", help="Directory containing many synthetic rendering fonts; system fonts are not searched")
     parser.add_argument("--font", action="append", default=None, help="Explicit font file; can be passed multiple times")
     parser.add_argument("--overwrite", action="store_true", help="Delete output directory and regenerate from scratch")
     parser.add_argument("--resume", action="store_true", help="Resume an interrupted generation by skipping manifest rows with existing images")

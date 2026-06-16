@@ -35,7 +35,7 @@ class VisualGraphemeContentEncoder(nn.Module):
         self.embeddings = nn.ModuleDict({("kind" if k == "type" else k): nn.Embedding(vocab_sizes[k], dim) for k in self.embedding_keys})
         self.position = nn.Embedding(max_tokens, dim)
         encoder_layer = nn.TransformerEncoderLayer(dim, heads, dim * 4, dropout=0.1, activation="gelu", batch_first=True, norm_first=True)
-        self.transformer = nn.TransformerEncoder(encoder_layer, layers)
+        self.transformer = nn.TransformerEncoder(encoder_layer, layers, enable_nested_tensor=False)
         self.norm = nn.LayerNorm(dim)
 
     def forward(self, text: dict[str, torch.Tensor], archetypes: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
