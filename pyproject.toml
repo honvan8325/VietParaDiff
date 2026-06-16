@@ -1,0 +1,41 @@
+[project]
+name = "vietparadiff"
+version = "2.0.0"
+description = "Diacritic-aware layout-factorized latent diffusion for one-shot Vietnamese paragraph handwriting generation"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+authors = [{name = "VietParaDiff Authors"}]
+dependencies = [
+  "torch>=2.3",
+  "torchvision>=0.18",
+  "pillow>=10.0",
+  "numpy>=1.26",
+  "pyyaml>=6.0",
+  "tqdm>=4.66",
+  "fonttools>=4.50",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.5"]
+
+[project.scripts]
+vpd-synthetic = "vietparadiff.cli.synthetic:main"
+vpd-prepare = "vietparadiff.cli.prepare:main"
+vpd-train = "vietparadiff.cli.train:main"
+vpd-infer = "vietparadiff.cli.infer:main"
+vpd-evaluate = "vietparadiff.cli.evaluate:main"
+vpd-smoke = "vietparadiff.cli.smoke:main"
+vpd-download-fonts = "vietparadiff.cli.download_fonts:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

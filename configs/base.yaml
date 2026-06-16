@@ -1,0 +1,85 @@
+seed: 2026
+project: vietparadiff
+run_dir: runs/vietparadiff
+
+image:
+  channels: 1
+  # Training uses dynamic bucketed paragraph height.  These fields are retained
+  # for compatibility and fixed-height ablations; the dataset loader does not
+  # resize natural paragraph images to this height.
+  height: null
+  width: 1024
+  height_buckets: [256, 384, 512, 768, 1024, 1536]
+  downsample: 8
+
+text:
+  dim: 384
+  layers: 8
+  heads: 8
+  max_tokens: 1024
+  archetype_size: 48
+  visual_base: 96
+
+style:
+  tokens_per_group: 16
+  codebook_size: 1024
+  writer_classes: 10000
+  base_channels: 96
+  transformer_layers: 4
+  heads: 8
+  pooled_grid: [8, 32]
+
+layout:
+  hidden_dim: 512
+  fields: 5
+  teacher_forcing_start: 1.0
+  teacher_forcing_end: 0.05
+  teacher_forcing_decay_steps: 30000
+
+vae:
+  latent_channels: 8
+  base_channels: 128
+
+htr:
+  hidden_dim: 384
+
+topology:
+  base_channels: 96
+
+unet:
+  base_channels: 128
+  channel_mults: [1, 2, 4, 4]
+  num_res_blocks: 2
+  heads: 8
+  time_dim: 384
+
+diffusion:
+  steps: 1000
+  min_snr_gamma: 5.0
+  cond_drop_prob: 0.15
+
+loss:
+  kl: 1.0e-6
+  frequency: 0.75
+  orthogonality: 0.02
+  style: 0.2
+  refiner: 1.0
+  topology: 0.5
+  break: 0.1
+
+training:
+  batch_size: 2
+  grad_accum_steps: 8
+  lr: 2.0e-4
+  weight_decay: 1.0e-2
+  max_steps: 200000
+  num_workers: 4
+  amp: true
+  checkpoint_every_steps: 1000
+  log_every_steps: 50
+  grad_clip: 1.0
+  dependency_checkpoints:
+    vae: null
+    htr: null
+    topology: null
+    style_layout: null
