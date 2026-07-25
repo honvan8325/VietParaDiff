@@ -10,7 +10,10 @@ wheels/
 .venv
 
 /data/raw
+/data/cvl
+/data/iam
+/data/uithwdb
+/data/vnondb
 .DS_Store
 *repomix*
 *.zip
-

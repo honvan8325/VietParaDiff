@@ -1,7 +1,11 @@
 [project]
 name = "vietparadiff"
 version = "0.1.0"
-description = "Add your description here"
+description = "Build unified handwriting manifests from Vietnamese and Latin corpora"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "pillow>=12.3.0",
+    "rich>=15.0.0",
+    "tqdm>=4.67.1",
+]
