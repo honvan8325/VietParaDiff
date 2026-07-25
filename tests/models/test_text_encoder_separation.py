@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import torch
+import pytest
 
 from src.models import (
     FactorizedGraphemeEncoder,
@@ -85,3 +86,35 @@ def test_hard_empty_line_keeps_spacing_but_has_no_active_mask() -> None:
     assert paragraph.lines == ("a", "", "b")
     assert active.tolist() == [True, False, True, False, False, False, False, False]
 
+
+def test_training_formatter_preserves_physical_lines_without_rewrapping() -> None:
+    _, config = make_config()
+    formatter = ParagraphFormatter(config)
+    text = f"{'a' * 80}\n{'b' * 80}"
+
+    wrapped = formatter.format(text)
+    physical = formatter.format(text, preserve_physical_lines=True)
+
+    assert len(wrapped.lines) > 2
+    assert physical.lines == ("a" * 80, "b" * 80)
+    assert physical.positions_in_line[-1] == 79
+    assert max(physical.positions_in_line) == 80
+
+
+def test_training_formatter_enforces_expanded_paragraph_contract() -> None:
+    _, config = make_config()
+    formatter = ParagraphFormatter(config)
+
+    assert config.max_lines == 8
+    assert config.max_position_in_line == 128
+    assert config.max_graphemes == 768
+    with pytest.raises(ValueError, match="vượt giới hạn 8"):
+        formatter.format(
+            "\n".join("line" for _ in range(9)),
+            preserve_physical_lines=True,
+        )
+    with pytest.raises(ValueError, match="vượt 128"):
+        formatter.format(
+            "a" * 129,
+            preserve_physical_lines=True,
+        )

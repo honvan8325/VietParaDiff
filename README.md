@@ -205,6 +205,87 @@ Current generated manifests contain:
 | VNOnDB | 224 | 1,144 | 7,296 | 110,746 | 119,186 |
 | **Total** | **1,446** | **5,425** | **41,318** | **417,555** | **464,298** |
 
+## Creating training splits
+
+Build all stage-specific manifests after the five normalized manifests
+(`cvl`, `iam`, `uithwdb`, `vnondb`, and `uithwdb_augmented`) are available:
+
+```bash
+uv run python scripts/create_splits.py
+```
+
+The default split is deterministic, writer-disjoint, stratified by corpus
+family, and reserves 20% of canonical writers for test with seed 42. Change
+these values explicitly when needed:
+
+```bash
+uv run python scripts/create_splits.py \
+  --test-fraction 0.2 \
+  --seed 42 \
+  --overwrite
+```
+
+UIT-HWDB and VNOnDB writers are canonicalized as a single Vietnamese writer
+family using matching paragraph transcripts and handwriting-image signatures.
+Consequently, the same physical writer cannot appear under one dataset in
+train and the other dataset in test. Synthetic UIT-HWDB paragraphs inherit
+their source writer's split and are train-only.
+
+The command writes:
+
+```text
+data/splits/
+├── writers/
+│   ├── train.json
+│   └── test.json
+├── autokl/
+│   ├── train_paragraphs.jsonl
+│   └── test_paragraphs.jsonl
+├── htr/
+│   ├── train_lines.jsonl
+│   ├── train_words.jsonl
+│   ├── test_lines.jsonl
+│   └── test_words.jsonl
+└── vietparadiff/
+    ├── pretrain_targets.jsonl
+    ├── pretrain_references.jsonl
+    ├── finetune_targets_real.jsonl
+    ├── finetune_targets_synthetic.jsonl
+    ├── finetune_references.jsonl
+    ├── test_pairs.jsonl
+    └── rejected_targets.jsonl
+```
+
+AutoKL receives only real paragraphs. HTR receives real Vietnamese line and
+word samples. Generator pretraining uses IAM and factorizer-supported CVL
+paragraphs with same-corpus line references. Finetuning uses real Vietnamese
+paragraphs plus train-only stitched paragraphs, preserving each synthetic
+record's `augmentation.source_line_ids`. Fixed test pairs contain a real
+Vietnamese paragraph and a different-content real line from the same unseen
+canonical writer. Targets without any valid same-writer reference are omitted
+from the generator manifests and recorded in `rejected_targets.jsonl` with
+their stage, reason code, and concrete reason. They remain available to
+AutoKL because that stage does not require text/style conditioning.
+
+Generator targets use `formatter_mode="physical_lines"`. Their annotated
+newlines are preserved rather than wrapped a second time, and every accepted
+target is validated against the model contract:
+
+```text
+maximum physical lines:          8
+maximum graphemes per line:    128
+maximum paragraph tokens:      768
+```
+
+Every accepted target is also guaranteed to have at least one real line
+reference from the same canonical writer whose content is outside the target.
+For stitched targets, all `augmentation.source_line_ids` are additionally
+excluded from the eligible reference set.
+
+The manifests retain all eligible records. The HTR line/word ratio and the
+generator real/synthetic ratio belong to the later training sampler; the split
+builder does not downsample records to enforce those ratios.
+
 ## Dataset-specific behavior
 
 ### CVL

@@ -57,9 +57,9 @@ class TextEncoderConfig:
     num_heads: int = 8
     ffn_dim: int = 2048
     dropout: float = 0.1
-    max_graphemes: int = 384
+    max_graphemes: int = 768
     max_lines: int = 8
-    max_position_in_line: int = 64
+    max_position_in_line: int = 128
     canvas_width: int = 1024
     height_buckets: tuple[int, ...] = (
         384,
@@ -89,10 +89,10 @@ class TextEncoderConfig:
             raise ValueError("Text dims phải là embedding=128, model=512, context=768.")
         if self.num_layers != 6 or self.num_heads != 8 or self.ffn_dim != 2048:
             raise ValueError("Text Transformer phải là 6 layers, 8 heads, FFN 2048.")
-        if self.max_graphemes != 384 or self.max_lines != 8:
-            raise ValueError("Text phải hỗ trợ 384 graphemes và tối đa 8 dòng.")
-        if self.max_position_in_line != 64 or self.canvas_width != 1024:
-            raise ValueError("Position-in-line phải là 64 và canvas width là 1024.")
+        if self.max_graphemes != 768 or self.max_lines != 8:
+            raise ValueError("Text phải hỗ trợ 768 graphemes và tối đa 8 dòng.")
+        if self.max_position_in_line != 128 or self.canvas_width != 1024:
+            raise ValueError("Position-in-line phải là 128 và canvas width là 1024.")
         if self.height_buckets != (384, 512, 640, 768, 896, 1024, 1280):
             raise ValueError("Paragraph height buckets không đúng method.")
         if not 0.0 <= self.dropout < 1.0:

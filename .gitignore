@@ -12,6 +12,7 @@ wheels/
 /data/**
 !/data/**/
 !/data/**/*.jsonl
+!/data/splits/**/*.json
 *repomix*
 *.zip
 .DS_Store

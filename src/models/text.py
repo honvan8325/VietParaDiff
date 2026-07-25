@@ -112,7 +112,10 @@ class ParagraphFormatter:
         character_width_scale: float = 1.0,
         word_gap_scale: float = 1.0,
         line_gap_scale: float = 1.0,
+        preserve_physical_lines: bool = False,
     ) -> FormattedParagraph:
+        if not isinstance(preserve_physical_lines, bool):
+            raise TypeError("preserve_physical_lines phải là bool.")
         if not 0.85 <= character_width_scale <= 1.15:
             raise ValueError("character_width_scale phải nằm trong [0.85, 1.15].")
         if not 0.80 <= word_gap_scale <= 1.20:
@@ -127,64 +130,81 @@ class ParagraphFormatter:
             else:
                 sections[-1].append(grapheme)
 
-        margin, usable_width = 48, self.config.canvas_width - 96
-        narrow, wide = set("fijlt"), set("mw")
+        margin = 48
+        if preserve_physical_lines:
+            lines = sections
+        else:
+            usable_width = self.config.canvas_width - 2 * margin
+            narrow, wide = set("fijlt"), set("mw")
 
-        def advance(grapheme: FactorizedGrapheme) -> float:
-            if grapheme.class_name == "digit":
-                width = 30.0
-            elif grapheme.class_name == "punctuation":
-                width = 18.0
-            elif grapheme.base.lower() in narrow:
-                width = 20.0
-            elif grapheme.base.lower() in wide:
-                width = 42.0
-            else:
-                width = 32.0
-            return width * character_width_scale
-
-        space = FactorizedGrapheme(" ", " ", "none", "none", "none", "space")
-        lines: list[list[FactorizedGrapheme]] = []
-        for section in sections:
-            words: list[list[FactorizedGrapheme]] = []
-            word: list[FactorizedGrapheme] = []
-            for grapheme in section:
-                if grapheme.class_name == "space":
-                    if word:
-                        words.append(word)
-                        word = []
+            def advance(grapheme: FactorizedGrapheme) -> float:
+                if grapheme.class_name == "digit":
+                    width = 30.0
+                elif grapheme.class_name == "punctuation":
+                    width = 18.0
+                elif grapheme.base.lower() in narrow:
+                    width = 20.0
+                elif grapheme.base.lower() in wide:
+                    width = 42.0
                 else:
-                    word.append(grapheme)
-            if word:
-                words.append(word)
-            if not words:
-                lines.append([])
-                continue
+                    width = 32.0
+                return width * character_width_scale
 
-            line: list[FactorizedGrapheme] = []
-            line_width = 0.0
-            for word in words:
-                word_width = sum(advance(item) for item in word)
-                gap = 18.0 * word_gap_scale if line else 0.0
-                if line and line_width + gap + word_width > usable_width:
+            space = FactorizedGrapheme(
+                " ",
+                " ",
+                "none",
+                "none",
+                "none",
+                "space",
+            )
+            lines = []
+            for section in sections:
+                words: list[list[FactorizedGrapheme]] = []
+                word: list[FactorizedGrapheme] = []
+                for grapheme in section:
+                    if grapheme.class_name == "space":
+                        if word:
+                            words.append(word)
+                            word = []
+                    else:
+                        word.append(grapheme)
+                if word:
+                    words.append(word)
+                if not words:
+                    lines.append([])
+                    continue
+
+                line: list[FactorizedGrapheme] = []
+                line_width = 0.0
+                for word in words:
+                    word_width = sum(advance(item) for item in word)
+                    gap = 18.0 * word_gap_scale if line else 0.0
+                    if (
+                        line
+                        and line_width + gap + word_width > usable_width
+                    ):
+                        lines.append(line)
+                        line, line_width, gap = [], 0.0, 0.0
+                    if word_width <= usable_width:
+                        if line:
+                            line.append(space)
+                            line_width += gap
+                        line.extend(word)
+                        line_width += word_width
+                    else:
+                        for grapheme in word:
+                            width = advance(grapheme)
+                            if (
+                                line
+                                and line_width + width > usable_width
+                            ):
+                                lines.append(line)
+                                line, line_width = [], 0.0
+                            line.append(grapheme)
+                            line_width += width
+                if line:
                     lines.append(line)
-                    line, line_width, gap = [], 0.0, 0.0
-                if word_width <= usable_width:
-                    if line:
-                        line.append(space)
-                        line_width += gap
-                    line.extend(word)
-                    line_width += word_width
-                else:
-                    for grapheme in word:
-                        width = advance(grapheme)
-                        if line and line_width + width > usable_width:
-                            lines.append(line)
-                            line, line_width = [], 0.0
-                        line.append(grapheme)
-                        line_width += width
-            if line:
-                lines.append(line)
 
         if len(lines) > self.config.max_lines:
             raise ValueError(
@@ -207,7 +227,10 @@ class ParagraphFormatter:
         strings: list[str] = []
         for line_id, line in enumerate(lines):
             if len(line) > self.config.max_position_in_line:
-                raise ValueError(f"Dòng {line_id} vượt 64 graphemes.")
+                raise ValueError(
+                    f"Dòng {line_id} có {len(line)} graphemes, vượt "
+                    f"{self.config.max_position_in_line}."
+                )
             strings.append("".join(item.surface for item in line))
             for position, grapheme in enumerate(line):
                 flattened.append(grapheme)
@@ -402,7 +425,10 @@ class FactorizedGraphemeEncoder(nn.Module):
         if batch.height_bucket_ids.shape != (shape[0],):
             raise ValueError("height_bucket_ids phải có shape [B].")
         if shape[1] == 0 or shape[1] > self.config.max_graphemes:
-            raise ValueError("Sequence length phải nằm trong [1, 384].")
+            raise ValueError(
+                "Sequence length phải nằm trong [1, "
+                f"{self.config.max_graphemes}]."
+            )
         if batch.attention_mask.dtype != torch.bool or not batch.attention_mask.any(dim=1).all():
             raise ValueError("Mỗi sample phải có attention_mask bool với ít nhất một token.")
         id_tensors = (
