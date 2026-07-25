@@ -10,6 +10,7 @@ from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
 
+from src.data.image_utils import save_normalized_image
 from src.logger import get_logger
 
 __all__ = ["build_iam_dataset"]
@@ -171,14 +172,19 @@ def _save_crop(
     bbox: tuple[int, int, int, int],
     output_path: Path,
     padding: int,
-) -> None:
-    """Crop and save one grayscale IAM sample as a PNG.
+    level: str,
+) -> tuple[int, int]:
+    """Crop, width-limit, and save one grayscale IAM sample as a PNG.
 
     Args:
         image: Grayscale source form.
         bbox: Tight component-based bounding box.
         output_path: Destination path for the PNG crop.
         padding: Context padding to add around the tight box.
+        level: Sample level used to select the maximum output width.
+
+    Returns:
+        The final ``(width, height)`` written to ``output_path``.
 
     Raises:
         ValueError: If clamping produces an empty crop.
@@ -195,11 +201,12 @@ def _save_crop(
     if left >= right or top >= bottom:
         raise ValueError(f"Invalid crop box: {crop_box}")
 
-    image.crop(crop_box).save(
-        output_path,
-        format="PNG",
-        compress_level=1,
-    )
+    crop = image.crop(crop_box)
+
+    try:
+        return save_normalized_image(crop, output_path, level=level)
+    finally:
+        crop.close()
 
 
 def build_iam_dataset() -> None:
@@ -208,7 +215,7 @@ def build_iam_dataset() -> None:
     A form image is opened once, then reused to crop its paragraph, line, and
     word samples. Word crops are emitted only for lines IAM marks as reliably
     segmented. All accepted images are stored as grayscale PNG files under
-    ``data/iam/images``.
+    ``data/iam/images`` with the shared level-specific width limits.
 
     Raises:
         FileNotFoundError: If a required IAM image, XML, or metadata directory
@@ -384,14 +391,6 @@ def build_iam_dataset() -> None:
 
         output_paragraph = IMAGES / f"{normalized_form_id}.png"
 
-        paragraph_record = {
-            "id": normalized_form_id,
-            "image": output_paragraph.as_posix(),
-            "text": paragraph_text,
-            "writer_id": writer_id,
-            "level": "paragraph",
-        }
-
         line_records = []
         word_records = []
 
@@ -402,12 +401,22 @@ def build_iam_dataset() -> None:
             with Image.open(form_source) as source_image:
                 image = source_image.convert("L")
 
-                _save_crop(
+                paragraph_width, paragraph_height = _save_crop(
                     image=image,
                     bbox=paragraph_bbox,
                     output_path=output_paragraph,
                     padding=PARAGRAPH_PADDING,
+                    level="paragraph",
                 )
+                paragraph_record = {
+                    "id": normalized_form_id,
+                    "image": output_paragraph.as_posix(),
+                    "text": paragraph_text,
+                    "writer_id": writer_id,
+                    "level": "paragraph",
+                    "width": paragraph_width,
+                    "height": paragraph_height,
+                }
 
                 # Line crops are retained whenever their transcript and
                 # component-derived bounding box are valid.
@@ -429,11 +438,12 @@ def build_iam_dataset() -> None:
 
                     output_line = IMAGES / f"{normalized_line_id}.png"
 
-                    _save_crop(
+                    line_width, line_height = _save_crop(
                         image=image,
                         bbox=line_bbox,
                         output_path=output_line,
                         padding=LINE_PADDING,
+                        level="line",
                     )
 
                     line_records.append(
@@ -443,6 +453,8 @@ def build_iam_dataset() -> None:
                             "text": line_text,
                             "writer_id": writer_id,
                             "level": "line",
+                            "width": line_width,
+                            "height": line_height,
                         }
                     )
 
@@ -473,11 +485,12 @@ def build_iam_dataset() -> None:
 
                         output_word = IMAGES / f"{normalized_word_id}.png"
 
-                        _save_crop(
+                        word_width, word_height = _save_crop(
                             image=image,
                             bbox=word_bbox,
                             output_path=output_word,
                             padding=WORD_PADDING,
+                            level="word",
                         )
 
                         word_records.append(
@@ -487,6 +500,8 @@ def build_iam_dataset() -> None:
                                 "text": word_text,
                                 "writer_id": writer_id,
                                 "level": "word",
+                                "width": word_width,
+                                "height": word_height,
                             }
                         )
 

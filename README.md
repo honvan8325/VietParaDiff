@@ -9,8 +9,8 @@ corpora:
 - VNOnDB
 
 The builders convert the original dataset layouts into one shared format:
-grayscale PNG images plus a UTF-8 JSON Lines manifest. Each manifest can
-contain paragraph-, line-, and word-level samples.
+width-limited grayscale PNG images plus a UTF-8 JSON Lines manifest. Each
+manifest can contain paragraph-, line-, and word-level samples.
 
 ## Requirements
 
@@ -47,6 +47,7 @@ root. Dataset paths are intentionally repository-relative.
     ├── data/
     │   ├── cvl.py
     │   ├── iam.py
+    │   ├── image_utils.py       # Shared image normalization policy
     │   ├── uithwdb.py
     │   └── vnondb.py
     └── logger.py
@@ -103,9 +104,10 @@ Each builder:
 
 1. Reads the original annotations and source images.
 2. Validates the metadata needed for each sample.
-3. Converts accepted images to 8-bit grayscale PNG files.
+3. Converts accepted images to width-limited 8-bit grayscale PNG files.
 4. Creates dataset-prefixed sample and writer identifiers.
-5. Writes `data/<dataset>/manifest.jsonl`.
+5. Records each final image's width and height.
+6. Writes `data/<dataset>/manifest.jsonl`.
 
 Individual builders are also available as Python functions:
 
@@ -125,7 +127,9 @@ Every non-blank manifest line is an independent JSON object:
   "image": "data/iam/images/iam_a01_000u_00.png",
   "text": "A MOVE to stop Mr. Gaitskell from",
   "writer_id": "iam_000",
-  "level": "line"
+  "level": "line",
+  "width": 1024,
+  "height": 143
 }
 ```
 
@@ -136,8 +140,24 @@ Every non-blank manifest line is an independent JSON object:
 | `text` | string | Ground-truth transcription. Paragraphs preserve line breaks. |
 | `writer_id` | string | Dataset-prefixed writer identifier. |
 | `level` | string | One of `paragraph`, `line`, or `word`. |
+| `width` | integer | Final normalized image width in pixels. |
+| `height` | integer | Final normalized image height in pixels. |
 
 Dataset prefixes prevent identifier collisions when manifests are combined.
+
+### Image sizing policy
+
+Resizing is based only on image width:
+
+| Sample level | Maximum width | Height |
+| --- | ---: | --- |
+| `paragraph` | 1024 px | Unconstrained |
+| `line` | 1024 px | Unconstrained |
+| `word` | 512 px | Unconstrained |
+
+An image is downscaled only when its width exceeds the applicable limit.
+Smaller images are never upscaled. Every resize preserves the original aspect
+ratio and uses Pillow's Lanczos resampling filter.
 
 ## Dataset statistics
 

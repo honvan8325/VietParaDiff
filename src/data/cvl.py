@@ -11,6 +11,7 @@ from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
 
+from src.data.image_utils import save_normalized_image
 from src.logger import get_logger
 
 __all__ = ["build_cvl_dataset"]
@@ -32,8 +33,8 @@ def build_cvl_dataset() -> None:
     """Rebuild CVL paragraph, line, and word samples.
 
     The builder indexes the original TIFF crops and PAGE XML annotations,
-    converts every accepted image to an 8-bit grayscale PNG, and writes one
-    JSON object per sample to ``data/cvl/manifest.jsonl``.
+    converts every accepted image to a width-limited 8-bit grayscale PNG, and
+    writes one JSON object per sample to ``data/cvl/manifest.jsonl``.
 
     Warning:
         ``data/cvl`` is deleted before the new dataset is written. Keep any
@@ -213,10 +214,10 @@ def build_cvl_dataset() -> None:
                 output_word = IMAGES / f"{normalized_word_id}.png"
 
                 with Image.open(word_source) as image:
-                    image.convert("L").save(
+                    word_width, word_height = save_normalized_image(
+                        image,
                         output_word,
-                        format="PNG",
-                        compress_level=1,
+                        level="word",
                     )
 
                 word_records.append(
@@ -226,6 +227,8 @@ def build_cvl_dataset() -> None:
                         "text": text,
                         "writer_id": writer_id,
                         "level": "word",
+                        "width": word_width,
+                        "height": word_height,
                     }
                 )
 
@@ -245,10 +248,10 @@ def build_cvl_dataset() -> None:
             output_line = IMAGES / f"{normalized_line_id}.png"
 
             with Image.open(line_source) as image:
-                image.convert("L").save(
+                line_width, line_height = save_normalized_image(
+                    image,
                     output_line,
-                    format="PNG",
-                    compress_level=1,
+                    level="line",
                 )
 
             line_records.append(
@@ -258,6 +261,8 @@ def build_cvl_dataset() -> None:
                     "text": line_text,
                     "writer_id": writer_id,
                     "level": "line",
+                    "width": line_width,
+                    "height": line_height,
                 }
             )
 
@@ -278,10 +283,10 @@ def build_cvl_dataset() -> None:
         output_paragraph = IMAGES / f"{normalized_page_id}.png"
 
         with Image.open(paragraph_source) as image:
-            image.convert("L").save(
+            paragraph_width, paragraph_height = save_normalized_image(
+                image,
                 output_paragraph,
-                format="PNG",
-                compress_level=1,
+                level="paragraph",
             )
 
         manifest.append(
@@ -291,6 +296,8 @@ def build_cvl_dataset() -> None:
                 "text": paragraph_text,
                 "writer_id": writer_id,
                 "level": "paragraph",
+                "width": paragraph_width,
+                "height": paragraph_height,
             }
         )
 

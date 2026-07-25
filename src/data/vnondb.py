@@ -9,6 +9,7 @@ from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
 
+from src.data.image_utils import save_normalized_image
 from src.logger import get_logger
 
 __all__ = ["build_vnondb_dataset"]
@@ -33,7 +34,7 @@ def build_vnondb_dataset() -> None:
     """Rebuild VNOnDB paragraph, line, and word samples.
 
     Every source PNG is paired with a same-stem UTF-8 transcript file. Valid
-    pairs are converted to grayscale PNG images and recorded in
+    pairs are converted to width-limited grayscale PNG images and recorded in
     ``data/vnondb/manifest.jsonl``.
 
     Raises:
@@ -120,10 +121,10 @@ def build_vnondb_dataset() -> None:
 
         try:
             with Image.open(image_source) as image:
-                image.convert("L").save(
+                image_width, image_height = save_normalized_image(
+                    image,
                     output_image,
-                    format="PNG",
-                    compress_level=1,
+                    level=level,
                 )
         except OSError as error:
             logger.warning(f"Cannot process image {image_source}: {error}")
@@ -136,6 +137,8 @@ def build_vnondb_dataset() -> None:
                 "text": text,
                 "writer_id": writer_id,
                 "level": level,
+                "width": image_width,
+                "height": image_height,
             }
         )
 

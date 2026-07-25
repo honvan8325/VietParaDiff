@@ -9,6 +9,7 @@ from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
 
+from src.data.image_utils import save_normalized_image
 from src.logger import get_logger
 
 __all__ = ["build_uithwdb_dataset"]
@@ -33,8 +34,8 @@ def build_uithwdb_dataset() -> None:
 
     UIT-HWDB already provides separate level and writer directories. This
     builder reads each writer's ``label.json``, converts referenced images to
-    grayscale PNG, assigns globally namespaced IDs, and writes the normalized
-    JSONL manifest to ``data/uithwdb/manifest.jsonl``.
+    width-limited grayscale PNG, assigns globally namespaced IDs, and writes
+    the normalized JSONL manifest to ``data/uithwdb/manifest.jsonl``.
 
     Warning:
         ``data/uithwdb`` is deleted before the new dataset is written.
@@ -141,10 +142,10 @@ def build_uithwdb_dataset() -> None:
 
             try:
                 with Image.open(image_source) as image:
-                    image.convert("L").save(
+                    image_width, image_height = save_normalized_image(
+                        image,
                         output_image,
-                        format="PNG",
-                        compress_level=1,
+                        level=level,
                     )
             except OSError as error:
                 logger.warning(f"Cannot process image {image_source}: {error}")
@@ -157,6 +158,8 @@ def build_uithwdb_dataset() -> None:
                     "text": text,
                     "writer_id": writer_id,
                     "level": level,
+                    "width": image_width,
+                    "height": image_height,
                 }
             )
 

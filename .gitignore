@@ -9,11 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
-/data/raw
-/data/cvl
-/data/iam
-/data/uithwdb
-/data/vnondb
-.DS_Store
+/data/**
+!/data/**/
+!/data/**/*.jsonl
 *repomix*
 *.zip
+.DS_Store
