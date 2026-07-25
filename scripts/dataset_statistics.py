@@ -12,8 +12,6 @@ from typing import TypedDict
 from rich.console import Console
 from rich.table import Table
 
-DATASETS = ("cvl", "iam", "uithwdb", "vnondb")
-
 
 class DatasetStatistics(TypedDict):
     """Schema for one dataset row in table and JSON output."""
@@ -24,6 +22,36 @@ class DatasetStatistics(TypedDict):
     lines: int
     words: int
     total: int
+
+
+def discover_datasets(data_root: Path) -> tuple[str, ...]:
+    """Discover dataset directories that contain a JSONL manifest.
+
+    Args:
+        data_root: Directory whose immediate children may be datasets.
+
+    Returns:
+        Dataset directory names sorted for deterministic output.
+
+    Raises:
+        FileNotFoundError: If ``data_root`` is not a directory.
+        RuntimeError: If no child directory contains ``manifest.jsonl``.
+    """
+    if not data_root.is_dir():
+        raise FileNotFoundError(f"Data root not found: {data_root}")
+
+    datasets = tuple(
+        sorted(
+            path.name
+            for path in data_root.iterdir()
+            if path.is_dir() and (path / "manifest.jsonl").is_file()
+        )
+    )
+
+    if not datasets:
+        raise RuntimeError(f"No dataset manifests found under: {data_root}")
+
+    return datasets
 
 
 def collect_statistics(dataset: str, manifest_path: Path) -> DatasetStatistics:
@@ -135,8 +163,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "datasets",
         nargs="*",
-        choices=DATASETS,
-        help="Datasets to inspect. Defaults to all datasets.",
+        help=(
+            "Dataset directory names to inspect. Defaults to every directory "
+            "under --data-root that contains manifest.jsonl."
+        ),
     )
     parser.add_argument(
         "--data-root",
@@ -155,10 +185,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> None:
     """Load selected manifests and print per-dataset and aggregate statistics."""
     args = parse_args(argv)
-    datasets = args.datasets or DATASETS
+    datasets = tuple(args.datasets) or discover_datasets(args.data_root)
     statistics = []
 
     for dataset in datasets:
+        if Path(dataset).name != dataset or dataset in {".", ".."}:
+            raise ValueError(f"Dataset must be a directory name: {dataset}")
+
         # Normalized datasets share the same directory contract, so selecting a
         # dataset changes only this path and requires no dataset-specific code.
         manifest_path = args.data_root / dataset / "manifest.jsonl"

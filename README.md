@@ -161,7 +161,8 @@ ratio and uses Pillow's Lanczos resampling filter.
 
 ## Dataset statistics
 
-Calculate statistics for every supported dataset:
+Calculate statistics for every directory under `data/` that contains a
+`manifest.jsonl` file:
 
 ```bash
 uv run python scripts/dataset_statistics.py
