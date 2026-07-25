@@ -103,11 +103,13 @@ uv run python scripts/reprocess_data.py vnondb
 Each builder:
 
 1. Reads the original annotations and source images.
-2. Validates the metadata needed for each sample.
-3. Converts accepted images to width-limited 8-bit grayscale PNG files.
-4. Creates dataset-prefixed sample and writer identifiers.
-5. Records each final image's width and height.
-6. Writes `data/<dataset>/manifest.jsonl`.
+2. Reconstructs paragraph transcripts from ordered physical-line annotations,
+   preserving each real line break as `\n`.
+3. Validates the metadata needed for each sample.
+4. Converts accepted images to width-limited 8-bit grayscale PNG files.
+5. Creates dataset-prefixed sample and writer identifiers.
+6. Records each final image's width and height.
+7. Writes `data/<dataset>/manifest.jsonl`.
 
 Individual builders are also available as Python functions:
 

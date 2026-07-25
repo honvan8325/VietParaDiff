@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections import defaultdict
 from pathlib import Path
 
 from PIL import Image
 from tqdm import tqdm
 
 from src.data.image_utils import save_normalized_image
+from src.data.paragraph_labels import (
+    join_paragraph_lines,
+    split_indexed_line_stem,
+)
 from src.logger import get_logger
 
 __all__ = ["build_vnondb_dataset"]
@@ -48,6 +53,25 @@ def build_vnondb_dataset() -> None:
     for level, source_dir in LEVEL_DIRS.items():
         if not source_dir.exists():
             raise FileNotFoundError(f"Required VNOnDB folder not found: {source_dir}")
+
+    paragraph_lines: dict[str, list[tuple[int, str]]] = defaultdict(list)
+    for text_source in sorted(LEVEL_DIRS["line"].glob("*.txt")):
+        try:
+            text = text_source.read_text(encoding="utf-8-sig").strip()
+        except (OSError, UnicodeDecodeError) as error:
+            logger.warning(f"Cannot read line transcript {text_source}: {error}")
+            continue
+        if not text:
+            logger.warning(f"Empty line transcript: {text_source}")
+            continue
+        try:
+            paragraph_stem, line_index = split_indexed_line_stem(
+                text_source.stem
+            )
+        except ValueError as error:
+            logger.warning(f"{error} File: {text_source}")
+            continue
+        paragraph_lines[paragraph_stem].append((line_index, text))
 
     if OUT.exists():
         logger.warning(f"Removing existing output folder: {OUT}")
@@ -102,6 +126,25 @@ def build_vnondb_dataset() -> None:
             continue
 
         raw_id = image_source.stem
+        if level == "paragraph":
+            indexed_lines = paragraph_lines.get(raw_id)
+            if not indexed_lines:
+                logger.warning(
+                    f"Line transcripts not found for paragraph: {image_source}"
+                )
+                continue
+            line_texts = [
+                line_text
+                for _, line_text in sorted(
+                    indexed_lines,
+                    key=lambda item: item[0],
+                )
+            ]
+            try:
+                text = join_paragraph_lines(text, line_texts)
+            except ValueError as error:
+                logger.warning(f"{error} Paragraph: {text_source}")
+                continue
 
         # VNOnDB embeds the writer key in the first two underscore-separated
         # fields. For example, ``20140603_0003_BCCTC_tg_0`` belongs to writer

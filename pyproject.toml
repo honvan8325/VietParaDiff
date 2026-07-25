@@ -7,5 +7,16 @@ requires-python = ">=3.12"
 dependencies = [
     "pillow>=12.3.0",
     "rich>=15.0.0",
+    "torch>=2.13.0",
+    "torchvision>=0.28.0",
     "tqdm>=4.67.1",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

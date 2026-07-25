@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections import defaultdict
 from pathlib import Path
 
 from PIL import Image
 from tqdm import tqdm
 
 from src.data.image_utils import save_normalized_image
+from src.data.paragraph_labels import (
+    align_sequential_paragraph_lines,
+    flatten_whitespace,
+    join_paragraph_lines,
+    split_indexed_line_stem,
+)
 from src.logger import get_logger
 
 __all__ = ["build_uithwdb_dataset"]
@@ -27,6 +34,69 @@ LEVEL_DIRS = {
     "line": RAW / "UIT_HWDB_line",
     "paragraph": RAW / "UIT_HWDB_paragraph",
 }
+
+VNON_PROCESSED = Path("data/raw/VNOnDB/Data_processed")
+VNON_LINE_DIR = VNON_PROCESSED / "InkData_line_processed"
+VNON_PARAGRAPH_DIR = VNON_PROCESSED / "InkData_paragraph_processed"
+
+
+def _load_vnondb_line_fallbacks() -> dict[
+    tuple[str, ...],
+    list[dict[str, tuple[str, ...]]],
+]:
+    """Index VNOnDB line labels for UIT writers with incomplete line exports."""
+    if not VNON_LINE_DIR.exists() or not VNON_PARAGRAPH_DIR.exists():
+        return {}
+
+    indexed_lines: dict[str, list[tuple[int, str]]] = defaultdict(list)
+    for text_path in sorted(VNON_LINE_DIR.glob("*.txt")):
+        try:
+            text = text_path.read_text(encoding="utf-8-sig").strip()
+            paragraph_stem, line_index = split_indexed_line_stem(
+                text_path.stem
+            )
+        except (OSError, UnicodeDecodeError, ValueError):
+            continue
+        if text:
+            indexed_lines[paragraph_stem].append((line_index, text))
+
+    paragraphs_by_writer: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for text_path in sorted(VNON_PARAGRAPH_DIR.glob("*.txt")):
+        try:
+            text = text_path.read_text(encoding="utf-8-sig").strip()
+        except (OSError, UnicodeDecodeError):
+            continue
+        parts = text_path.stem.split("_")
+        if text and len(parts) >= 2:
+            paragraphs_by_writer["_".join(parts[:2])].append(
+                (text_path.stem, text)
+            )
+
+    fallbacks: dict[
+        tuple[str, ...],
+        list[dict[str, tuple[str, ...]]],
+    ] = defaultdict(list)
+    for paragraphs in paragraphs_by_writer.values():
+        signature = tuple(
+            sorted(flatten_whitespace(text) for _, text in paragraphs)
+        )
+        segments: dict[str, tuple[str, ...]] = {}
+        for paragraph_stem, paragraph_text in paragraphs:
+            line_texts = tuple(
+                line_text
+                for _, line_text in sorted(
+                    indexed_lines.get(paragraph_stem, ()),
+                    key=lambda item: item[0],
+                )
+            )
+            try:
+                join_paragraph_lines(paragraph_text, line_texts)
+            except ValueError:
+                continue
+            segments[flatten_whitespace(paragraph_text)] = line_texts
+        if segments:
+            fallbacks[signature].append(segments)
+    return dict(fallbacks)
 
 
 def build_uithwdb_dataset() -> None:
@@ -79,6 +149,91 @@ def build_uithwdb_dataset() -> None:
 
     logger.info(f"Writer folders: {len(writer_jobs)}")
 
+    labels_by_job: dict[tuple[str, str, str], dict[str, object]] = {}
+    for level, split_folder, writer_dir in writer_jobs:
+        key = (level, split_folder, writer_dir.name)
+        label_path = writer_dir / "label.json"
+        if not label_path.exists():
+            logger.warning(f"Label not found: {label_path}")
+            continue
+        try:
+            with label_path.open("r", encoding="utf-8") as file:
+                labels = json.load(file)
+        except (OSError, json.JSONDecodeError) as error:
+            logger.warning(f"Cannot read label file {label_path}: {error}")
+            continue
+        if not isinstance(labels, dict):
+            logger.warning(f"Invalid label format: {label_path}")
+            continue
+        labels_by_job[key] = labels
+
+    paragraph_lines: dict[tuple[str, str, str], tuple[str, ...]] = {}
+    fallback_index = _load_vnondb_line_fallbacks()
+    writer_keys = sorted(
+        {
+            (split_folder, writer_dir.name)
+            for _, split_folder, writer_dir in writer_jobs
+        },
+        key=lambda item: (item[0], int(item[1])),
+    )
+    for split_folder, writer_raw in writer_keys:
+        line_labels = labels_by_job.get(("line", split_folder, writer_raw))
+        paragraph_labels = labels_by_job.get(
+            ("paragraph", split_folder, writer_raw)
+        )
+        if paragraph_labels is None:
+            continue
+        if line_labels is None:
+            line_labels = {}
+
+        ordered_lines = sorted(
+            (
+                (name, text.strip())
+                for name, text in line_labels.items()
+                if isinstance(text, str) and text.strip()
+            ),
+            key=lambda item: int(Path(item[0]).stem),
+        )
+        ordered_paragraphs = sorted(
+            (
+                (name, text.strip())
+                for name, text in paragraph_labels.items()
+                if isinstance(text, str) and text.strip()
+            ),
+            key=lambda item: int(Path(item[0]).stem),
+        )
+        matches, unmatched = align_sequential_paragraph_lines(
+            ordered_paragraphs,
+            ordered_lines,
+        )
+
+        for image_name, line_texts in matches.items():
+            paragraph_lines[
+                (split_folder, writer_raw, image_name)
+            ] = line_texts
+
+        if unmatched:
+            signature = tuple(
+                sorted(
+                    flatten_whitespace(text)
+                    for _, text in ordered_paragraphs
+                )
+            )
+            fallback_candidates = fallback_index.get(signature, ())
+            if len(fallback_candidates) == 1:
+                fallback = fallback_candidates[0]
+                paragraph_text_by_name = dict(ordered_paragraphs)
+                for image_name in unmatched:
+                    line_texts = fallback.get(
+                        flatten_whitespace(
+                            paragraph_text_by_name[image_name]
+                        )
+                    )
+                    if line_texts is not None:
+                        paragraph_lines[
+                            (split_folder, writer_raw, image_name)
+                        ] = line_texts
+
     # Process every granularity through the same normalization path because
     # UIT-HWDB uses the same label-file format at all three levels.
 
@@ -92,20 +247,8 @@ def build_uithwdb_dataset() -> None:
         writer_id = f"uithwdb_{writer_raw}"
 
         label_path = writer_dir / "label.json"
-
-        if not label_path.exists():
-            logger.warning(f"Label not found: {label_path}")
-            continue
-
-        try:
-            with label_path.open("r", encoding="utf-8") as file:
-                labels = json.load(file)
-        except (OSError, json.JSONDecodeError) as error:
-            logger.warning(f"Cannot read label file {label_path}: {error}")
-            continue
-
-        if not isinstance(labels, dict):
-            logger.warning(f"Invalid label format: {label_path}")
+        labels = labels_by_job.get((level, split_folder, writer_raw))
+        if labels is None:
             continue
 
         image_names = sorted(
@@ -127,6 +270,23 @@ def build_uithwdb_dataset() -> None:
             if not text:
                 logger.warning(f"Empty transcript: {label_path} | {image_name}")
                 continue
+            if level == "paragraph":
+                line_texts = paragraph_lines.get(
+                    (split_folder, writer_raw, image_name)
+                )
+                if line_texts is None:
+                    logger.warning(
+                        "Line labels not found for paragraph: "
+                        f"{label_path} | {image_name}"
+                    )
+                    continue
+                try:
+                    text = join_paragraph_lines(text, line_texts)
+                except ValueError as error:
+                    logger.warning(
+                        f"{error} Paragraph: {label_path} | {image_name}"
+                    )
+                    continue
 
             image_source = writer_dir / image_name
 
