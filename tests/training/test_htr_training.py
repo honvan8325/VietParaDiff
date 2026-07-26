@@ -11,9 +11,8 @@ from torch import Tensor, nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 
-from scripts.train_htr import validate_htr_dataset
-from src.data.training import HTRVocabulary
-from src.htr_training import (
+from vietparadiff.data.pipeline import HTRVocabulary
+from vietparadiff.training.htr import (
     HTRCheckpointConfig,
     HTRDataConfig,
     HTREpochMetrics,
@@ -24,9 +23,7 @@ from src.htr_training import (
     HTRStageConfig,
     HTRTrainer,
     HTRTrainingConfig,
-    RuntimePrecision,
     compute_htr_losses,
-    create_grad_scaler,
     create_optimizer_and_scheduler,
     ctc_loss,
     greedy_ctc_decode,
@@ -35,9 +32,11 @@ from src.htr_training import (
     micro_batch_loss_weight,
     minimum_ctc_steps,
     save_model_checkpoint,
+    validate_htr_dataset,
 )
-from src.models.config import HTRConfig
-from src.models.htr import HTROutput, VietnameseHTR
+from vietparadiff.models.config import HTRConfig
+from vietparadiff.models.htr import HTROutput, VietnameseHTR
+from vietparadiff.runtime import RuntimePrecision, create_grad_scaler
 
 
 class TinyHTR(nn.Module):

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import random
@@ -20,16 +19,27 @@ from torch.optim import AdamW, Optimizer
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.tensorboard import SummaryWriter
 
-from src.autokl_training import (
+from vietparadiff.artifacts import (
+    LatentStatistics,
+    load_latent_statistics,
+    save_latent_statistics,
+    sha256_file,
+)
+from vietparadiff.diffusion import (
+    add_diffusion_noise,
+    cosine_alpha_sigma,
+    velocity_target,
+)
+from vietparadiff.runtime import (
     RuntimePrecision,
     autocast_context,
     create_grad_scaler,
     resolve_runtime,
     seed_everything,
 )
-from src.models.autokl import HandwritingAutoKL
-from src.models.text import GraphemeBatch, GraphemeVocabulary
-from src.models.vietparadiff import (
+from vietparadiff.models.autokl import HandwritingAutoKL
+from vietparadiff.models.grapheme import GraphemeBatch, GraphemeVocabulary
+from vietparadiff.models.generator import (
     VietParaDiff,
     VietParaDiffInput,
     VietParaDiffOutput,
@@ -397,78 +407,6 @@ def load_vietparadiff_training_config(
     )
 
 
-def sha256_file(path: Path) -> str:
-    if not path.is_file():
-        raise FileNotFoundError(f"Không tìm thấy artifact: {path}")
-    digest = hashlib.sha256()
-    with path.open("rb") as file:
-        for block in iter(lambda: file.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-@dataclass(frozen=True, slots=True)
-class LatentStatistics:
-    latent_mean: float
-    latent_std: float
-    scaling_factor: float
-    num_samples: int
-    num_elements: int
-    autokl_checkpoint_sha256: str
-
-    def __post_init__(self) -> None:
-        numeric = (
-            self.latent_mean,
-            self.latent_std,
-            self.scaling_factor,
-        )
-        if not all(math.isfinite(value) for value in numeric):
-            raise ValueError("Latent statistics phải hữu hạn.")
-        if self.latent_std <= 0.0 or self.scaling_factor <= 0.0:
-            raise ValueError("latent_std/scaling_factor phải dương.")
-        if not math.isclose(
-            self.scaling_factor,
-            1.0 / self.latent_std,
-            rel_tol=1e-9,
-            abs_tol=1e-12,
-        ):
-            raise ValueError(
-                "scaling_factor phải bằng chính xác 1 / latent_std."
-            )
-        if self.num_samples <= 0 or self.num_elements <= 1:
-            raise ValueError("Latent statistics cần dữ liệu không rỗng.")
-        if len(self.autokl_checkpoint_sha256) != 64:
-            raise ValueError("AutoKL SHA-256 không hợp lệ.")
-
-    def normalize(self, latents: Tensor) -> Tensor:
-        if not latents.is_floating_point():
-            raise TypeError("latents phải có floating-point dtype.")
-        return (
-            latents - latents.new_tensor(self.latent_mean)
-        ) * latents.new_tensor(self.scaling_factor)
-
-    def denormalize(self, scaled_latents: Tensor) -> Tensor:
-        if not scaled_latents.is_floating_point():
-            raise TypeError(
-                "scaled_latents phải có floating-point dtype."
-            )
-        return (
-            scaled_latents
-            / scaled_latents.new_tensor(self.scaling_factor)
-            + scaled_latents.new_tensor(self.latent_mean)
-        )
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "latent_mean": self.latent_mean,
-            "latent_std": self.latent_std,
-            "scaling_factor": self.scaling_factor,
-            "num_samples": self.num_samples,
-            "num_elements": self.num_elements,
-            "autokl_checkpoint_sha256": self.autokl_checkpoint_sha256,
-        }
-
-
 class LatentStatisticsAccumulator:
     """Streaming population mean/std in float64 without retaining latents."""
 
@@ -526,137 +464,6 @@ class LatentStatisticsAccumulator:
             num_elements=self.count,
             autokl_checkpoint_sha256=checkpoint_sha256,
         )
-
-
-def save_latent_statistics(
-    path: Path,
-    statistics: LatentStatistics,
-) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(
-            statistics.to_dict(),
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(path)
-
-
-def load_latent_statistics(
-    path: Path,
-    *,
-    expected_autokl_checkpoint: Path,
-) -> LatentStatistics:
-    if not path.is_file():
-        raise FileNotFoundError(
-            f"Không tìm thấy latent statistics: {path}"
-        )
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    expected_keys = {
-        "latent_mean",
-        "latent_std",
-        "scaling_factor",
-        "num_samples",
-        "num_elements",
-        "autokl_checkpoint_sha256",
-    }
-    if not isinstance(payload, Mapping) or set(payload) != expected_keys:
-        raise ValueError(
-            f"Latent statistics keys phải bằng {sorted(expected_keys)}."
-        )
-    statistics = LatentStatistics(
-        latent_mean=float(payload["latent_mean"]),
-        latent_std=float(payload["latent_std"]),
-        scaling_factor=float(payload["scaling_factor"]),
-        num_samples=int(payload["num_samples"]),
-        num_elements=int(payload["num_elements"]),
-        autokl_checkpoint_sha256=str(
-            payload["autokl_checkpoint_sha256"]
-        ),
-    )
-    actual_hash = sha256_file(expected_autokl_checkpoint)
-    if statistics.autokl_checkpoint_sha256 != actual_hash:
-        raise ValueError(
-            "latent_statistics.json không thuộc AutoKL checkpoint hiện tại."
-        )
-    return statistics
-
-
-def cosine_alpha_sigma(
-    timesteps: Tensor,
-    *,
-    num_train_timesteps: int,
-) -> tuple[Tensor, Tensor]:
-    if (
-        timesteps.ndim != 1
-        or timesteps.dtype != torch.long
-        or num_train_timesteps < 2
-    ):
-        raise ValueError(
-            "timesteps phải là long [B] và num_train_timesteps >= 2."
-        )
-    if (
-        (timesteps < 0).any()
-        or (timesteps >= num_train_timesteps).any()
-    ):
-        raise ValueError(
-            f"timesteps phải nằm trong [0,{num_train_timesteps - 1}]."
-        )
-    offset = 0.008
-    progress = (timesteps.float() + 0.5) / num_train_timesteps
-    angles = (
-        (progress + offset) / (1.0 + offset) * math.pi / 2.0
-    )
-    return torch.cos(angles), torch.sin(angles)
-
-
-def velocity_target(
-    clean_latents: Tensor,
-    noise: Tensor,
-    alpha: Tensor,
-    sigma: Tensor,
-) -> Tensor:
-    if clean_latents.shape != noise.shape:
-        raise ValueError("clean_latents và noise phải cùng shape.")
-    if clean_latents.ndim != 4:
-        raise ValueError("clean_latents phải có shape [B,C,H,W].")
-    expected = (clean_latents.shape[0],)
-    if alpha.shape != expected or sigma.shape != expected:
-        raise ValueError(
-            f"alpha/sigma phải có shape {expected}."
-        )
-    return (
-        alpha[:, None, None, None].to(clean_latents.dtype) * noise
-        - sigma[:, None, None, None].to(clean_latents.dtype)
-        * clean_latents
-    )
-
-
-def add_diffusion_noise(
-    clean_latents: Tensor,
-    noise: Tensor,
-    alpha: Tensor,
-    sigma: Tensor,
-) -> Tensor:
-    if clean_latents.shape != noise.shape or clean_latents.ndim != 4:
-        raise ValueError(
-            "clean_latents/noise phải cùng shape [B,C,H,W]."
-        )
-    expected = (clean_latents.shape[0],)
-    if alpha.shape != expected or sigma.shape != expected:
-        raise ValueError(
-            f"alpha/sigma phải có shape {expected}."
-        )
-    return (
-        alpha[:, None, None, None].to(clean_latents.dtype)
-        * clean_latents
-        + sigma[:, None, None, None].to(clean_latents.dtype) * noise
-    )
 
 
 def learning_rate_factor(

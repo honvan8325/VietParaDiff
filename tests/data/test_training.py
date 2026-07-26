@@ -10,7 +10,7 @@ import torch
 from PIL import Image, ImageDraw
 from torch.utils.data import DataLoader
 
-from src.data.training import (
+from vietparadiff.data.pipeline import (
     AutoKLDataset,
     HTRDataset,
     HTRImageProcessor,
@@ -24,7 +24,7 @@ from src.data.training import (
     collate_autokl,
     collate_htr,
 )
-from src.models import (
+from vietparadiff.models import (
     GraphemeVocabulary,
     ParagraphFormatter,
     TextEncoderConfig,

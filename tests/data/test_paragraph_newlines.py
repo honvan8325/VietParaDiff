@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from src.data import uithwdb, vnondb
-from src.data.paragraph_labels import (
+from vietparadiff.data import uithwdb, vnondb
+from vietparadiff.data.paragraph_labels import (
     align_sequential_paragraph_lines,
     join_paragraph_lines,
     split_indexed_line_stem,

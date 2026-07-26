@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import random
 from collections.abc import Iterable, Mapping, Sequence
-from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 import torch
 import wandb
@@ -21,8 +19,16 @@ from torch.optim import AdamW, Optimizer
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.tensorboard import SummaryWriter
 
-from src.data.training import HTRVocabulary
-from src.models.htr import HTROutput, VietnameseHTR
+from vietparadiff.artifacts import sha256_file
+from vietparadiff.data.pipeline import HTRDataset, HTRVocabulary
+from vietparadiff.models.htr import HTROutput, VietnameseHTR
+from vietparadiff.runtime import (
+    RuntimePrecision,
+    autocast_context,
+    create_grad_scaler,
+    resolve_runtime,
+    seed_everything,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -366,59 +372,6 @@ def load_htr_training_config(path: Path) -> HTRTrainingConfig:
     )
 
 
-@dataclass(frozen=True, slots=True)
-class RuntimePrecision:
-    device: torch.device
-    dtype: torch.dtype
-    autocast_enabled: bool
-    scaler_enabled: bool
-
-
-def resolve_runtime(device: str, precision: str) -> RuntimePrecision:
-    if device == "auto":
-        resolved = (
-            torch.device("cuda")
-            if torch.cuda.is_available()
-            else torch.device("mps")
-            if torch.backends.mps.is_available()
-            else torch.device("cpu")
-        )
-    else:
-        resolved = torch.device(device)
-    if resolved.type == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("CUDA được yêu cầu nhưng không khả dụng.")
-    if resolved.type == "mps" and not torch.backends.mps.is_available():
-        raise RuntimeError("MPS được yêu cầu nhưng không khả dụng.")
-    if precision == "auto":
-        dtype = (
-            torch.bfloat16
-            if resolved.type == "cuda" and torch.cuda.is_bf16_supported()
-            else torch.float16
-            if resolved.type == "cuda"
-            else torch.float32
-        )
-    else:
-        dtype = {
-            "float32": torch.float32,
-            "float16": torch.float16,
-            "bfloat16": torch.bfloat16,
-        }[precision]
-    if resolved.type != "cuda" and dtype != torch.float32:
-        raise ValueError("CPU/MPS HTR training chỉ hỗ trợ float32.")
-    return RuntimePrecision(
-        resolved,
-        dtype,
-        resolved.type == "cuda" and dtype != torch.float32,
-        resolved.type == "cuda" and dtype == torch.float16,
-    )
-
-
-def autocast_context(runtime: RuntimePrecision) -> Any:
-    if not runtime.autocast_enabled:
-        return nullcontext()
-    return torch.autocast("cuda", dtype=runtime.dtype)
-
-
 def minimum_ctc_steps(target: Tensor) -> int:
     if target.ndim != 1:
         raise ValueError("target phải là [N].")
@@ -430,6 +383,57 @@ def minimum_ctc_steps(target: Tensor) -> int:
         raise ValueError("Active CTC target không được chứa blank ID 0.")
     repeats = int((target[1:] == target[:-1]).sum().item())
     return target.numel() + repeats
+
+
+def validate_htr_dataset(
+    dataset: HTRDataset,
+    dataset_name: str,
+) -> None:
+    """Preflight every sample against the fixed HTR/CTC width contract."""
+    for index in range(len(dataset)):
+        sample = dataset[index]
+        sample_id = sample.get("sample_id")
+        valid_width = sample.get("valid_width")
+        if not isinstance(sample_id, str) or not sample_id:
+            raise TypeError(
+                f"HTR sample ID không hợp lệ: dataset={dataset_name}, "
+                f"index={index}."
+            )
+        if not isinstance(valid_width, int) or valid_width <= 0:
+            raise TypeError(
+                "HTR valid_width phải là số nguyên dương: "
+                f"dataset={dataset_name}, sample={sample_id}, "
+                f"actual={valid_width!r}."
+            )
+        input_length = (valid_width + 3) // 4
+        if input_length > 2048:
+            raise ValueError(
+                "HTR width infeasible: "
+                f"dataset={dataset_name}, sample={sample_id}, "
+                f"valid_width={valid_width}, "
+                f"input_length={input_length}, maximum=2048."
+            )
+        for head in (
+            "raw_targets",
+            "base_targets",
+            "shape_targets",
+            "tone_targets",
+        ):
+            target = sample.get(head)
+            if not isinstance(target, Tensor):
+                raise TypeError(
+                    "HTR target phải là Tensor: "
+                    f"dataset={dataset_name}, sample={sample_id}, "
+                    f"head={head}, actual={type(target).__name__}."
+                )
+            required = minimum_ctc_steps(target)
+            if required > input_length:
+                raise ValueError(
+                    "HTR CTC target infeasible: "
+                    f"dataset={dataset_name}, sample={sample_id}, "
+                    f"head={head}, required={required}, "
+                    f"input_length={input_length}."
+                )
 
 
 def _long_tensor(batch: Mapping[str, object], name: str) -> Tensor:
@@ -802,10 +806,6 @@ def create_optimizer_and_scheduler(
     return optimizer, scheduler
 
 
-def create_grad_scaler(runtime: RuntimePrecision) -> torch.amp.GradScaler:
-    return torch.amp.GradScaler("cuda", enabled=runtime.scaler_enabled)
-
-
 def _move_batch(
     batch: Mapping[str, object], device: torch.device
 ) -> dict[str, object]:
@@ -813,16 +813,6 @@ def _move_batch(
     for name, value in batch.items():
         moved[name] = value.to(device, non_blocking=True) if isinstance(value, Tensor) else value
     return moved
-
-
-def sha256_file(path: Path) -> str:
-    if not path.is_file():
-        raise FileNotFoundError(f"Không tìm thấy artifact: {path}")
-    digest = hashlib.sha256()
-    with path.open("rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def artifact_hashes(config: HTRTrainingConfig) -> tuple[str, dict[str, str]]:
@@ -1191,12 +1181,3 @@ def load_best_for_evaluation(
 ) -> None:
     model.load_checkpoint(path)
     model.to(device)
-
-
-def seed_everything(seed: int) -> None:
-    if seed < 0:
-        raise ValueError("seed không được âm.")
-    random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)

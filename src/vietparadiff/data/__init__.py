@@ -1,9 +1,9 @@
 """Public dataset-building API."""
 
-from src.data.cvl import build_cvl_dataset
-from src.data.iam import build_iam_dataset
-from src.data.splits import SplitConfig, create_data_splits
-from src.data.training import (
+from vietparadiff.data.cvl import build_cvl_dataset
+from vietparadiff.data.iam import build_iam_dataset
+from vietparadiff.data.splits import SplitConfig, create_data_splits
+from vietparadiff.data.pipeline import (
     AutoKLDataset,
     HTRDataset,
     HTRImageProcessor,
@@ -17,8 +17,8 @@ from src.data.training import (
     collate_autokl,
     collate_htr,
 )
-from src.data.uithwdb import build_uithwdb_dataset
-from src.data.vnondb import build_vnondb_dataset
+from vietparadiff.data.uithwdb import build_uithwdb_dataset
+from vietparadiff.data.vnondb import build_vnondb_dataset
 
 __all__ = [
     "build_cvl_dataset",

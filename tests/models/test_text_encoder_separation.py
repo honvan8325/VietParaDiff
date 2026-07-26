@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 import pytest
 
-from src.models import (
+from vietparadiff.models import (
     FactorizedGraphemeEncoder,
     GraphemeBatch,
     GraphemeVocabulary,

@@ -14,7 +14,7 @@ from torch.nn import functional as F
 
 from .config import ParagraphUNetConfig, VietParaDiffConfig
 from .style import DualFrequencyStyleEncoder, StyleCondition
-from .text import FactorizedGraphemeEncoder, GraphemeBatch, GraphemeCondition
+from .grapheme import FactorizedGraphemeEncoder, GraphemeBatch, GraphemeCondition
 
 
 @dataclass(frozen=True, slots=True)

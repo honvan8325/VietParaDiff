@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from src.data.splits import (
+from vietparadiff.data.splits import (
     SplitConfig,
     _eligible_references,
     _supported_generator_text,
     create_data_splits,
 )
-from src.models import (
+from vietparadiff.models import (
     GraphemeVocabulary,
     ParagraphFormatter,
     TextEncoderConfig,

@@ -5,29 +5,29 @@ from __future__ import annotations
 
 import argparse
 import random
-import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
 
-if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from src.autokl_training import autocast_context
-from src.data.training import (
+from vietparadiff.artifacts import (
+    save_latent_statistics,
+    sha256_file,
+)
+from vietparadiff.data.pipeline import (
     AutoKLDataset,
     HeightBucketBatchSampler,
     collate_autokl,
 )
-from src.models.autokl import HandwritingAutoKL
-from src.vietparadiff_training import (
-    LatentStatisticsAccumulator,
+from vietparadiff.models.autokl import HandwritingAutoKL
+from vietparadiff.runtime import (
+    autocast_context,
     resolve_runtime,
-    save_latent_statistics,
     seed_everything,
-    sha256_file,
+)
+from vietparadiff.training.generator import (
+    LatentStatisticsAccumulator,
 )
 
 

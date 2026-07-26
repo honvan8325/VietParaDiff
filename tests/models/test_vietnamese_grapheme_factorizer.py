@@ -6,7 +6,7 @@ import unicodedata
 
 import pytest
 
-from src.models.text import FactorizedGrapheme, VietnameseGraphemeFactorizer
+from vietparadiff.models.grapheme import FactorizedGrapheme, VietnameseGraphemeFactorizer
 
 
 TONE_FORMS = {

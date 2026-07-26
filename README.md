@@ -43,25 +43,30 @@ original dataset licenses and usage terms still apply.
 
 ```text
 .
-├── data/
-│   ├── raw/                    # Original datasets; not tracked by Git
-│   ├── cvl/
-│   │   ├── images/             # Normalized grayscale PNG files
-│   │   └── manifest.jsonl
-│   ├── iam/
-│   ├── uithwdb/
-│   └── vnondb/
+├── configs/
+│   ├── autokl/train.yaml
+│   ├── htr/train.yaml
+│   └── vietparadiff/
+│       ├── pretrain.yaml
+│       └── generate.yaml
+├── data/                       # Raw, processed, and split manifests
 ├── scripts/
-│   ├── dataset_statistics.py   # Manifest-based dataset statistics
-│   └── reprocess_data.py       # Dataset builder dispatcher
+│   ├── build_dataset.py
+│   ├── summarize_datasets.py
+│   ├── inspect_training_data.py
+│   ├── train_autokl.py
+│   ├── train_htr.py
+│   ├── train_generator.py
+│   └── generate.py
 └── src/
-    ├── data/
-    │   ├── cvl.py
-    │   ├── iam.py
-    │   ├── image_utils.py       # Shared image normalization policy
-    │   ├── uithwdb.py
-    │   └── vnondb.py
-    └── logger.py
+    └── vietparadiff/
+        ├── artifacts.py        # Checkpoint-bound artifact contracts
+        ├── diffusion.py        # Shared velocity-diffusion equations
+        ├── runtime.py          # Device, precision, AMP, and RNG setup
+        ├── data/               # Builders and training data pipeline
+        ├── models/             # AutoKL, HTR, style, grapheme, generator
+        ├── training/           # Stage-specific trainers
+        └── inference/          # Sampling and generation pipeline
 ```
 
 ## Expected raw-data layout
@@ -100,10 +105,10 @@ VNOnDB expects every source PNG to have a same-stem `.txt` transcript file.
 Run the dispatcher with exactly one dataset name:
 
 ```bash
-uv run python scripts/reprocess_data.py cvl
-uv run python scripts/reprocess_data.py iam
-uv run python scripts/reprocess_data.py uithwdb
-uv run python scripts/reprocess_data.py vnondb
+uv run python scripts/build_dataset.py cvl
+uv run python scripts/build_dataset.py iam
+uv run python scripts/build_dataset.py uithwdb
+uv run python scripts/build_dataset.py vnondb
 ```
 
 > [!WARNING]
@@ -125,7 +130,7 @@ Each builder:
 Individual builders are also available as Python functions:
 
 ```python
-from src.data import build_iam_dataset
+from vietparadiff.data import build_iam_dataset
 
 build_iam_dataset()
 ```
@@ -178,25 +183,25 @@ Calculate statistics for every directory under `data/` that contains a
 `manifest.jsonl` file:
 
 ```bash
-uv run python scripts/dataset_statistics.py
+uv run python scripts/summarize_datasets.py
 ```
 
 Select one or more datasets:
 
 ```bash
-uv run python scripts/dataset_statistics.py iam cvl
+uv run python scripts/summarize_datasets.py iam cvl
 ```
 
 Produce machine-readable JSON:
 
 ```bash
-uv run python scripts/dataset_statistics.py iam --json
+uv run python scripts/summarize_datasets.py iam --json
 ```
 
 Read manifests from a different root:
 
 ```bash
-uv run python scripts/dataset_statistics.py \
+uv run python scripts/summarize_datasets.py \
   --data-root /path/to/data \
   iam
 ```
@@ -299,8 +304,8 @@ builder does not downsample records to enforce those ratios.
 
 ## Training data layer
 
-`src/data/training.py` converts split records into the exact tensors consumed
-by the three training stages:
+`src/vietparadiff/data/pipeline.py` converts split records into the exact
+tensors consumed by the three training stages:
 
 - `ParagraphImageProcessor` produces aspect-preserved grayscale paragraph
   canvases `[1, H_bucket, 1024]`.
@@ -327,7 +332,7 @@ Build the four HTR CTC vocabularies only from the training manifests:
 
 ```python
 from pathlib import Path
-from src.data import HTRVocabulary
+from vietparadiff.data import HTRVocabulary
 
 vocabulary = HTRVocabulary.build_from_manifests(
     (
@@ -344,7 +349,7 @@ training vocabularies.
 Render processed real samples for manual inspection before training:
 
 ```bash
-uv run python scripts/check_training_data.py
+uv run python scripts/inspect_training_data.py
 ```
 
 The command validates real collated batches and writes:
@@ -395,17 +400,52 @@ VNOnDB writer identifiers are derived from the first two underscore-separated
 fields of each source filename. Image/transcript pairs that are missing,
 empty, undecodable, or invalid are logged and skipped.
 
+## Training and generation
+
+Every stage has a distinct configuration path:
+
+```bash
+uv run python scripts/train_autokl.py \
+  --config configs/autokl/train.yaml
+
+uv run python scripts/train_htr.py \
+  --config configs/htr/train.yaml
+
+uv run python scripts/train_generator.py \
+  --config configs/vietparadiff/pretrain.yaml
+```
+
+Compute AutoKL latent normalization statistics before generator training:
+
+```bash
+uv run python scripts/compute_autokl_latent_stats.py --help
+```
+
+Generate a paragraph with the checkpoint-bound inference contract:
+
+```bash
+uv run python scripts/generate.py \
+  --config configs/vietparadiff/generate.yaml \
+  --text-file target.txt \
+  --reference reference.png
+```
+
 ## Validation
 
 Compile the source and scripts without rebuilding data:
 
 ```bash
-uv run python -m compileall -q src scripts
+uv run python -m compileall -q src/vietparadiff scripts
+uv run pytest
 ```
 
 Inspect command-line options:
 
 ```bash
-uv run python scripts/reprocess_data.py --help
-uv run python scripts/dataset_statistics.py --help
+uv run python scripts/build_dataset.py --help
+uv run python scripts/summarize_datasets.py --help
+uv run python scripts/train_autokl.py --help
+uv run python scripts/train_htr.py --help
+uv run python scripts/train_generator.py --help
+uv run python scripts/generate.py --help
 ```

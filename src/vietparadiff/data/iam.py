@@ -10,8 +10,8 @@ from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
 
-from src.data.image_utils import save_normalized_image
-from src.logger import get_logger
+from vietparadiff.data.image_utils import save_normalized_image
+from vietparadiff.cli_logging import get_logger
 
 __all__ = ["build_iam_dataset"]
 

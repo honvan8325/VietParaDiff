@@ -20,8 +20,8 @@ from torch import Tensor
 from torch.utils.data import Dataset, Sampler
 from torchvision.transforms.functional import pil_to_tensor
 
-from src.models.config import TextEncoderConfig
-from src.models.text import (
+from vietparadiff.models.config import TextEncoderConfig
+from vietparadiff.models.grapheme import (
     FormattedTextBatch,
     GraphemeVocabulary,
     ParagraphFormatter,

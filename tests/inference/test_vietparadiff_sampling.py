@@ -10,25 +10,31 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
-from src.models.config import (
+from vietparadiff.artifacts import LatentStatistics, sha256_file
+from vietparadiff.diffusion import (
+    add_diffusion_noise,
+    cosine_alpha_sigma,
+    velocity_target,
+)
+from vietparadiff.models.config import (
     AutoKLConfig,
     ParagraphUNetConfig,
     StyleEncoderConfig,
     TextEncoderConfig,
     VietParaDiffConfig,
 )
-from src.models.style import StyleCondition
-from src.models.text import (
+from vietparadiff.models.style import StyleCondition
+from vietparadiff.models.grapheme import (
     GraphemeBatch,
     GraphemeCondition,
     GraphemeVocabulary,
     ParagraphFormatter,
 )
-from src.models.vietparadiff import (
+from vietparadiff.models.generator import (
     VietParaDiffInput,
     VietParaDiffOutput,
 )
-from src.vietparadiff_sampling import (
+from vietparadiff.inference.generator import (
     SamplingConfig,
     build_sampling_timesteps,
     checkpoint_loading_config,
@@ -40,15 +46,6 @@ from src.vietparadiff_sampling import (
     sample_scaled_latent,
     velocity_to_clean_and_noise,
 )
-from src.vietparadiff_training import (
-    LatentStatistics,
-    add_diffusion_noise,
-    cosine_alpha_sigma,
-    sha256_file,
-    velocity_target,
-)
-
-
 class TinySamplingModel(nn.Module):
     def __init__(self, *, nan_velocity: bool = False) -> None:
         super().__init__()
@@ -450,7 +447,7 @@ def test_cfg_is_not_exposed_without_condition_dropout() -> None:
 
 def test_generation_yaml_loads_locked_contract() -> None:
     config = load_generation_config(
-        Path("configs/vietparadiff_generate.yaml")
+        Path("configs/vietparadiff/generate.yaml")
     )
     assert config.diffusion.num_inference_steps == 50
     assert not hasattr(config.diffusion, "num_train_timesteps")
@@ -552,7 +549,7 @@ def test_generation_uses_training_num_timesteps_from_contract(
     contract = _load_contract(paths)
     assert contract.num_train_timesteps == 777
     generation = load_generation_config(
-        Path("configs/vietparadiff_generate.yaml")
+        Path("configs/vietparadiff/generate.yaml")
     )
     assert not hasattr(generation.diffusion, "num_train_timesteps")
 

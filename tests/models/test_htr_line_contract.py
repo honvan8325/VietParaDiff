@@ -6,7 +6,7 @@ import pytest
 import torch
 from torch import Tensor, nn
 
-from src.models import HTRConfig, VietnameseHTR
+from vietparadiff.models import HTRConfig, VietnameseHTR
 
 
 def make_htr() -> VietnameseHTR:

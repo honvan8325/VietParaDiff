@@ -15,8 +15,8 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from src.models.config import TextEncoderConfig
-from src.models.text import (
+from vietparadiff.models.config import TextEncoderConfig
+from vietparadiff.models.grapheme import (
     SHAPE_MARKS,
     TONE_MARKS,
     GraphemeVocabulary,

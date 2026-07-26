@@ -11,27 +11,28 @@ import torch
 import yaml
 from torch import Tensor
 
-from src.models.autokl import HandwritingAutoKL
-from src.models.config import (
+from vietparadiff.artifacts import (
+    InferenceContract,
+    LatentStatistics,
+    sha256_file,
+)
+from vietparadiff.diffusion import cosine_alpha_sigma
+from vietparadiff.models.autokl import HandwritingAutoKL
+from vietparadiff.models.config import (
     AutoKLConfig,
     ParagraphUNetConfig,
     StyleEncoderConfig,
     TextEncoderConfig,
     VietParaDiffConfig,
 )
-from src.models.style import StyleCondition
-from src.models.text import (
+from vietparadiff.models.style import StyleCondition
+from vietparadiff.models.grapheme import (
     FormattedParagraph,
     GraphemeBatch,
     GraphemeVocabulary,
     ParagraphFormatter,
 )
-from src.models.vietparadiff import VietParaDiff, VietParaDiffInput
-from src.vietparadiff_training import (
-    LatentStatistics,
-    cosine_alpha_sigma,
-    sha256_file,
-)
+from vietparadiff.models.generator import VietParaDiff, VietParaDiffInput
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,53 +76,6 @@ class GenerationDiffusionConfig:
     def __post_init__(self) -> None:
         if self.num_inference_steps < 2:
             raise ValueError("num_inference_steps phải >= 2.")
-
-
-@dataclass(frozen=True, slots=True)
-class InferenceContract:
-    schema_version: int
-    prediction_type: str
-    noise_schedule: str
-    num_train_timesteps: int
-    neutral_layout: bool
-    generator_checkpoint_sha256: str
-    model_config_sha256: str
-    grapheme_vocabulary_sha256: str
-    autokl_checkpoint_sha256: str
-    latent_statistics_sha256: str
-
-    def __post_init__(self) -> None:
-        if self.schema_version != 1:
-            raise ValueError("Inference contract schema_version phải bằng 1.")
-        if self.prediction_type != "velocity":
-            raise ValueError(
-                "Inference contract prediction_type phải là velocity."
-            )
-        if self.noise_schedule != "cosine":
-            raise ValueError(
-                "Inference contract noise_schedule phải là cosine."
-            )
-        if self.num_train_timesteps < 2:
-            raise ValueError(
-                "Inference contract num_train_timesteps phải >= 2."
-            )
-        if self.neutral_layout is not True:
-            raise ValueError(
-                "Base inference contract phải dùng neutral_layout=true."
-            )
-        hashes = (
-            self.generator_checkpoint_sha256,
-            self.model_config_sha256,
-            self.grapheme_vocabulary_sha256,
-            self.autokl_checkpoint_sha256,
-            self.latent_statistics_sha256,
-        )
-        if any(
-            len(value) != 64
-            or any(character not in "0123456789abcdef" for character in value)
-            for value in hashes
-        ):
-            raise ValueError("Inference contract chứa SHA-256 không hợp lệ.")
 
 
 @dataclass(frozen=True, slots=True)

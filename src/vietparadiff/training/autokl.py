@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import random
 from collections.abc import Mapping, Sequence
-from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -19,7 +18,14 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.tensorboard import SummaryWriter
 
 import wandb
-from src.models.autokl import AutoKLOutput, HandwritingAutoKL
+from vietparadiff.models.autokl import AutoKLOutput, HandwritingAutoKL
+from vietparadiff.runtime import (
+    RuntimePrecision,
+    autocast_context,
+    create_grad_scaler,
+    resolve_runtime,
+    seed_everything,
+)
 
 
 HEIGHT_BUCKETS = (384, 512, 640, 768, 896, 1024, 1280)
@@ -346,58 +352,6 @@ def load_training_config(path: Path) -> AutoKLTrainingConfig:
     )
 
 
-@dataclass(frozen=True, slots=True)
-class RuntimePrecision:
-    device: torch.device
-    dtype: torch.dtype
-    autocast_enabled: bool
-    scaler_enabled: bool
-
-
-def resolve_runtime(device: str, precision: str) -> RuntimePrecision:
-    if device == "auto":
-        if torch.cuda.is_available():
-            resolved_device = torch.device("cuda")
-        elif torch.backends.mps.is_available():
-            resolved_device = torch.device("mps")
-        else:
-            resolved_device = torch.device("cpu")
-    else:
-        resolved_device = torch.device(device)
-    if resolved_device.type == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("CUDA được yêu cầu nhưng không khả dụng.")
-    if resolved_device.type == "mps" and not torch.backends.mps.is_available():
-        raise RuntimeError("MPS được yêu cầu nhưng không khả dụng.")
-
-    if precision == "auto":
-        if resolved_device.type == "cuda":
-            dtype = (
-                torch.bfloat16
-                if torch.cuda.is_bf16_supported()
-                else torch.float16
-            )
-        else:
-            dtype = torch.float32
-    else:
-        dtype = {
-            "float32": torch.float32,
-            "float16": torch.float16,
-            "bfloat16": torch.bfloat16,
-        }[precision]
-    if resolved_device.type != "cuda" and dtype != torch.float32:
-        raise ValueError("CPU/MPS training chỉ hỗ trợ float32.")
-    return RuntimePrecision(
-        device=resolved_device,
-        dtype=dtype,
-        autocast_enabled=(
-            resolved_device.type == "cuda" and dtype != torch.float32
-        ),
-        scaler_enabled=(
-            resolved_device.type == "cuda" and dtype == torch.float16
-        ),
-    )
-
-
 def kl_weight_at_step(
     global_step: int,
     *,
@@ -487,23 +441,6 @@ def create_optimizer_and_scheduler(
     )
     scheduler = LambdaLR(optimizer, lr_lambda=lambda _: 1.0)
     return optimizer, scheduler
-
-
-def create_grad_scaler(runtime: RuntimePrecision) -> torch.amp.GradScaler:
-    return torch.amp.GradScaler(
-        "cuda",
-        enabled=runtime.scaler_enabled,
-    )
-
-
-def autocast_context(runtime: RuntimePrecision) -> Any:
-    if not runtime.autocast_enabled:
-        return nullcontext()
-    return torch.autocast(
-        device_type="cuda",
-        dtype=runtime.dtype,
-        enabled=True,
-    )
 
 
 def _tensor_to_pil(tensor: Tensor) -> Image.Image:
@@ -1267,10 +1204,11 @@ class AutoKLTrainer:
         return state
 
 
-def seed_everything(seed: int) -> None:
-    if seed < 0:
-        raise ValueError("seed không được âm.")
-    random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+def load_best_for_evaluation(
+    model: HandwritingAutoKL,
+    path: Path,
+    device: torch.device,
+) -> None:
+    """Load the exact downstream checkpoint before final evaluation."""
+    model.load_checkpoint(path)
+    model.to(device)

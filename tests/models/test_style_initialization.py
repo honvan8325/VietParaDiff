@@ -6,7 +6,7 @@ from dataclasses import fields
 
 import torch
 
-from src.models import (
+from vietparadiff.models import (
     DualFrequencyStyleEncoder,
     StyleCondition,
     StyleEncoderConfig,

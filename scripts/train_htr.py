@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import random
-import sys
 from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
@@ -14,29 +13,28 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from src.data.training import (
+from vietparadiff.data.pipeline import (
     HTRDataset,
     HTRVocabulary,
     WidthBucketBatchSampler,
     collate_htr,
 )
-from src.htr_training import (
+from vietparadiff.training.htr import (
     HTRLogger,
     HTRTrainer,
     artifact_hashes,
-    create_grad_scaler,
     create_optimizer_and_scheduler,
     load_best_for_evaluation,
     load_htr_training_config,
-    minimum_ctc_steps,
+    validate_htr_dataset,
+)
+from vietparadiff.models.config import HTRConfig
+from vietparadiff.models.htr import VietnameseHTR
+from vietparadiff.runtime import (
+    create_grad_scaler,
     resolve_runtime,
     seed_everything,
 )
-from src.models.config import HTRConfig
-from src.models.htr import VietnameseHTR
 
 
 def _seed_worker(worker_id: int) -> None:
@@ -53,7 +51,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("configs/htr.yaml"),
+        default=Path("configs/htr/train.yaml"),
         help="HTR YAML training configuration.",
     )
     parser.add_argument(
@@ -115,53 +113,6 @@ def _loader(
         kwargs["persistent_workers"] = True
         kwargs["multiprocessing_context"] = "spawn"
     return DataLoader(dataset, **kwargs)  # type: ignore[arg-type]
-
-
-def validate_htr_dataset(dataset: HTRDataset, dataset_name: str) -> None:
-    for index in range(len(dataset)):
-        sample = dataset[index]
-        sample_id = sample.get("sample_id")
-        valid_width = sample.get("valid_width")
-        if not isinstance(sample_id, str) or not sample_id:
-            raise TypeError(
-                f"HTR sample ID không hợp lệ: dataset={dataset_name}, "
-                f"index={index}."
-            )
-        if not isinstance(valid_width, int) or valid_width <= 0:
-            raise TypeError(
-                "HTR valid_width phải là số nguyên dương: "
-                f"dataset={dataset_name}, sample={sample_id}, "
-                f"actual={valid_width!r}."
-            )
-        input_length = (valid_width + 3) // 4
-        if input_length > 2048:
-            raise ValueError(
-                "HTR width infeasible: "
-                f"dataset={dataset_name}, sample={sample_id}, "
-                f"valid_width={valid_width}, "
-                f"input_length={input_length}, maximum=2048."
-            )
-        for head in (
-            "raw_targets",
-            "base_targets",
-            "shape_targets",
-            "tone_targets",
-        ):
-            target = sample.get(head)
-            if not isinstance(target, torch.Tensor):
-                raise TypeError(
-                    "HTR target phải là Tensor: "
-                    f"dataset={dataset_name}, sample={sample_id}, "
-                    f"head={head}, actual={type(target).__name__}."
-                )
-            required = minimum_ctc_steps(target)
-            if required > input_length:
-                raise ValueError(
-                    "HTR CTC target infeasible: "
-                    f"dataset={dataset_name}, sample={sample_id}, "
-                    f"head={head}, required={required}, "
-                    f"input_length={input_length}."
-                )
 
 
 def main(argv: Sequence[str] | None = None) -> None:

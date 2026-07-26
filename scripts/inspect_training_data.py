@@ -3,17 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 import torch
 from PIL import Image, ImageDraw, ImageOps
 
-if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from src.data.training import (
+from vietparadiff.data.pipeline import (
     AutoKLDataset,
     HTRDataset,
     HTRVocabulary,
@@ -23,7 +19,7 @@ from src.data.training import (
     collate_autokl,
     collate_htr,
 )
-from src.models import (
+from vietparadiff.models import (
     GraphemeVocabulary,
     ParagraphFormatter,
     TextEncoderConfig,

@@ -7,7 +7,6 @@ import json
 import os
 import random
 import shutil
-import sys
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -18,12 +17,8 @@ from typing import TypedDict
 from PIL import Image
 from tqdm import tqdm
 
-if __package__ in {None, ""}:
-    # Support both direct execution and ``python -m`` module execution.
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from src.data.image_utils import save_normalized_image
-from src.logger import get_logger
+from vietparadiff.data.image_utils import save_normalized_image
+from vietparadiff.cli_logging import get_logger
 
 logger = get_logger(__name__)
 

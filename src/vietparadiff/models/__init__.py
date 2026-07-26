@@ -11,7 +11,7 @@ from .config import (
 )
 from .htr import ConformerBlock, HTROutput, VietnameseHTR
 from .style import DualFrequencyStyleEncoder, StyleCondition
-from .text import (
+from .grapheme import (
     FactorizedGrapheme,
     FactorizedGraphemeEncoder,
     FormattedParagraph,
@@ -22,7 +22,7 @@ from .text import (
     ParagraphFormatter,
     VietnameseGraphemeFactorizer,
 )
-from .vietparadiff import (
+from .generator import (
     ParagraphUNet,
     TextGuidedInterLineHarmonizer,
     VietParaDiff,

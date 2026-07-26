@@ -3,17 +3,10 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-if __package__ in {None, ""}:
-    # Direct execution sets sys.path[0] to ``scripts`` rather than the project
-    # root. Add the root so ``src`` imports work for both ``python script.py``
-    # and ``python -m scripts.reprocess_data``.
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from src.data import (
+from vietparadiff.data import (
     build_cvl_dataset,
     build_iam_dataset,
     build_uithwdb_dataset,

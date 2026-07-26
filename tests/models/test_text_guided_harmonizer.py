@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from src.models import (
+from vietparadiff.models import (
     GraphemeCondition,
     ParagraphUNetConfig,
     TextGuidedInterLineHarmonizer,

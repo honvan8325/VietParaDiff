@@ -4,31 +4,30 @@ from __future__ import annotations
 
 import argparse
 import random
-import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
 
-if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from src.autokl_training import (
+from vietparadiff.training.autokl import (
     AutoKLLogger,
     AutoKLTrainer,
-    create_grad_scaler,
     create_optimizer_and_scheduler,
+    load_best_for_evaluation,
     load_training_config,
-    resolve_runtime,
-    seed_everything,
 )
-from src.data.training import (
+from vietparadiff.data.pipeline import (
     AutoKLDataset,
     HeightBucketBatchSampler,
     collate_autokl,
 )
-from src.models.autokl import HandwritingAutoKL
+from vietparadiff.models.autokl import HandwritingAutoKL
+from vietparadiff.runtime import (
+    create_grad_scaler,
+    resolve_runtime,
+    seed_everything,
+)
 
 
 def _seed_worker(worker_id: int) -> None:
@@ -45,7 +44,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("configs/autokl.yaml"),
+        default=Path("configs/autokl/train.yaml"),
         help="YAML training configuration.",
     )
     parser.add_argument(
@@ -86,17 +85,6 @@ def _loader(
         kwargs["persistent_workers"] = True
         kwargs["multiprocessing_context"] = "spawn"
     return DataLoader(dataset, **kwargs)  # type: ignore[arg-type]
-
-
-def load_best_for_evaluation(
-    model: HandwritingAutoKL,
-    path: Path,
-    device: torch.device,
-) -> None:
-    """Load the exact downstream checkpoint before final test rendering."""
-
-    model.load_checkpoint(path)
-    model.to(device)
 
 
 def main(argv: Sequence[str] | None = None) -> None:

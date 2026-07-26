@@ -10,50 +10,53 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
-from src.autokl_training import RuntimePrecision
-from src.models.config import (
+from vietparadiff.artifacts import (
+    LatentStatistics,
+    load_latent_statistics,
+    save_latent_statistics,
+    sha256_file,
+)
+from vietparadiff.diffusion import (
+    add_diffusion_noise,
+    cosine_alpha_sigma,
+    velocity_target,
+)
+from vietparadiff.models.config import (
     AutoKLConfig,
     ParagraphUNetConfig,
     StyleEncoderConfig,
     TextEncoderConfig,
     VietParaDiffConfig,
 )
-from src.models.style import StyleCondition
-from src.models.text import (
+from vietparadiff.models.style import StyleCondition
+from vietparadiff.models.grapheme import (
     GraphemeBatch,
     GraphemeCondition,
     GraphemeVocabulary,
     ParagraphFormatter,
 )
-from src.models.vietparadiff import (
+from vietparadiff.models.generator import (
     VietParaDiff,
     VietParaDiffInput,
     VietParaDiffOutput,
 )
-from src.vietparadiff_training import (
+from vietparadiff.training.generator import (
     DiffusionStageConfig,
     FrozenAutoKLConfig,
     GeneratorCheckpointConfig,
     GeneratorLoggingConfig,
     GeneratorOptimizerConfig,
     GeneratorSchedulerConfig,
-    LatentStatistics,
     LatentStatisticsAccumulator,
     StyleInitializationConfig,
     VietParaDiffDataConfig,
     VietParaDiffTrainer,
     VietParaDiffTrainingConfig,
-    add_diffusion_noise,
-    cosine_alpha_sigma,
-    create_grad_scaler,
     create_optimizer_and_scheduler,
     learning_rate_factor,
-    load_latent_statistics,
     load_vietparadiff_training_config,
-    save_latent_statistics,
-    sha256_file,
-    velocity_target,
 )
+from vietparadiff.runtime import RuntimePrecision, create_grad_scaler
 
 
 class _Posterior:
@@ -289,7 +292,7 @@ def _trainer(
 
 def test_pretrain_yaml_loads_locked_base_contract() -> None:
     config = load_vietparadiff_training_config(
-        Path("configs/vietparadiff_pretrain.yaml")
+        Path("configs/vietparadiff/pretrain.yaml")
     )
     assert config.data.train_targets.name == "pretrain_targets.jsonl"
     assert config.diffusion.num_train_timesteps == 1000

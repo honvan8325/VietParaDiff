@@ -7,8 +7,7 @@ import pytest
 import torch
 from torch import Tensor, nn
 
-from scripts.train_autokl import load_best_for_evaluation
-from src.autokl_training import (
+from vietparadiff.training.autokl import (
     AutoKLLogger,
     AutoKLLossConfig,
     AutoKLStageConfig,
@@ -19,17 +18,17 @@ from src.autokl_training import (
     LoggingConfig,
     OptimizerTrainingConfig,
     compute_autokl_losses,
-    create_grad_scaler,
     create_optimizer_and_scheduler,
     kl_weight_at_step,
-    resolve_runtime,
+    load_best_for_evaluation,
     save_model_checkpoint,
 )
-from src.models.autokl import (
+from vietparadiff.models.autokl import (
     AutoKLOutput,
     DiagonalGaussianDistribution,
     HandwritingAutoKL,
 )
+from vietparadiff.runtime import create_grad_scaler, resolve_runtime
 
 
 class TinyAutoKL(nn.Module):

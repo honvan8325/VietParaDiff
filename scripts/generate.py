@@ -4,25 +4,21 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 import torch
 from PIL import Image
 
-if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from src.autokl_training import autocast_context
-from src.data.training import ReferenceImageProcessor
-from src.models.autokl import HandwritingAutoKL
-from src.models.text import (
+from vietparadiff.artifacts import load_latent_statistics
+from vietparadiff.data.pipeline import ReferenceImageProcessor
+from vietparadiff.models.autokl import HandwritingAutoKL
+from vietparadiff.models.grapheme import (
     GraphemeVocabulary,
     ParagraphFormatter,
 )
-from src.models.vietparadiff import VietParaDiff
-from src.vietparadiff_sampling import (
+from vietparadiff.models.generator import VietParaDiff
+from vietparadiff.inference.generator import (
     SamplingConfig,
     checkpoint_loading_config,
     generate_paragraph,
@@ -30,8 +26,8 @@ from src.vietparadiff_sampling import (
     load_inference_contract,
     load_model_config,
 )
-from src.vietparadiff_training import (
-    load_latent_statistics,
+from vietparadiff.runtime import (
+    autocast_context,
     resolve_runtime,
     seed_everything,
 )
@@ -48,7 +44,7 @@ def parse_args(
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("configs/vietparadiff_generate.yaml"),
+        default=Path("configs/vietparadiff/generate.yaml"),
     )
     parser.add_argument(
         "--text-file",

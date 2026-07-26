@@ -10,14 +10,14 @@ from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
 
-from src.data.image_utils import save_normalized_image
-from src.data.paragraph_labels import (
+from vietparadiff.data.image_utils import save_normalized_image
+from vietparadiff.data.paragraph_labels import (
     align_sequential_paragraph_lines,
     flatten_whitespace,
     join_paragraph_lines,
     split_indexed_line_stem,
 )
-from src.logger import get_logger
+from vietparadiff.cli_logging import get_logger
 
 __all__ = ["build_uithwdb_dataset"]
 

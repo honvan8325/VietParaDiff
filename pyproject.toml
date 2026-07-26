@@ -15,6 +15,13 @@ dependencies = [
     "wandb>=0.28.1",
 ]
 
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vietparadiff"]
+
 [dependency-groups]
 dev = [
     "pre-commit>=4.6.1",
@@ -22,5 +29,4 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
 testpaths = ["tests"]

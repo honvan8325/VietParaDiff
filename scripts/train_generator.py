@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import math
 import random
-import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from pathlib import Path
@@ -14,35 +13,34 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from src.data.training import (
+from vietparadiff.data.pipeline import (
     HeightBucketBatchSampler,
     VietParaDiffCollator,
     VietParaDiffDataset,
 )
-from src.models.autokl import HandwritingAutoKL
-from src.models.config import (
+from vietparadiff.models.autokl import HandwritingAutoKL
+from vietparadiff.models.config import (
     AutoKLConfig,
     ParagraphUNetConfig,
     StyleEncoderConfig,
     TextEncoderConfig,
     VietParaDiffConfig,
 )
-from src.models.vietparadiff import VietParaDiff
-from src.models.text import GraphemeVocabulary, ParagraphFormatter
-from src.vietparadiff_training import (
+from vietparadiff.models.generator import VietParaDiff
+from vietparadiff.models.grapheme import GraphemeVocabulary, ParagraphFormatter
+from vietparadiff.artifacts import load_latent_statistics
+from vietparadiff.runtime import (
+    create_grad_scaler,
+    resolve_runtime,
+    seed_everything,
+)
+from vietparadiff.training.generator import (
     VietParaDiffLogger,
     VietParaDiffTrainer,
     artifact_hashes,
-    create_grad_scaler,
     create_optimizer_and_scheduler,
     ensure_inference_static_artifacts,
-    load_latent_statistics,
     load_vietparadiff_training_config,
-    resolve_runtime,
-    seed_everything,
 )
 
 
@@ -64,7 +62,7 @@ def parse_args(
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("configs/vietparadiff_pretrain.yaml"),
+        default=Path("configs/vietparadiff/pretrain.yaml"),
     )
     parser.add_argument(
         "--resume",
