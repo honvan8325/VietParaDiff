@@ -17,16 +17,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         )
     )
     parser.add_argument(
-        "--writer-crosswalk",
-        type=Path,
-        default=Path("data/metadata/vietnamese_writer_crosswalk.json"),
-        help="Human-approved UIT-HWDB/VNOnDB writer crosswalk.",
-    )
-    parser.add_argument(
         "--data-root",
         type=Path,
         default=Path("data"),
-        help="Root containing the five normalized dataset manifests.",
+        help="Root containing normalized and UIT-augmented manifests.",
     )
     parser.add_argument(
         "--output-root",
@@ -60,7 +54,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         SplitConfig(
             data_root=args.data_root,
             output_root=args.output_root,
-            writer_crosswalk=args.writer_crosswalk,
             test_fraction=args.test_fraction,
             seed=args.seed,
             overwrite=args.overwrite,

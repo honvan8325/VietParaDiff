@@ -1741,547 +1741,7 @@
       ]
     },
     {
-      "canonical_writer_id": "vn_writer_094d4e6d7471",
-      "member_writer_ids": [
-        "uithwdb_214"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_0b970015d44a",
-      "member_writer_ids": [
-        "uithwdb_205",
-        "vnondb_20140603_0035"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_10ea953b4540",
-      "member_writer_ids": [
-        "uithwdb_230",
-        "vnondb_20160505_0114"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_12311789f645",
-      "member_writer_ids": [
-        "uithwdb_7",
-        "vnondb_20140922_0014"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_139b7e78fe22",
-      "member_writer_ids": [
-        "uithwdb_129"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_16258fbb498e",
-      "member_writer_ids": [
-        "uithwdb_226",
-        "vnondb_20160525_0168"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_1af90a183e99",
-      "member_writer_ids": [
-        "uithwdb_63",
-        "vnondb_20160527_0173"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_25be588f26d9",
-      "member_writer_ids": [
-        "uithwdb_77",
-        "vnondb_20160510_0148"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_278a9873be7b",
-      "member_writer_ids": [
-        "uithwdb_199",
-        "vnondb_20140603_0018"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_27ae5a1334c9",
-      "member_writer_ids": [
-        "uithwdb_134",
-        "vnondb_20160419_0095"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_33c7946f97b5",
-      "member_writer_ids": [
-        "uithwdb_225",
-        "vnondb_20160518_0152"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_349b0c841c12",
-      "member_writer_ids": [
-        "uithwdb_53",
-        "vnondb_20150303_0036"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_3639be6aecc7",
-      "member_writer_ids": [
-        "uithwdb_217",
-        "vnondb_20160426_0107"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_424a855cfd63",
-      "member_writer_ids": [
-        "uithwdb_48",
-        "vnondb_20160518_0159"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_4facf5c6c95c",
-      "member_writer_ids": [
-        "uithwdb_148",
-        "vnondb_20150305_0036"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_57566c360df7",
-      "member_writer_ids": [
-        "uithwdb_106",
-        "vnondb_20160526_0172"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_5922124bac80",
-      "member_writer_ids": [
-        "uithwdb_69",
-        "vnondb_20140603_0023"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_5f35f6ad89dc",
-      "member_writer_ids": [
-        "uithwdb_224",
-        "vnondb_20160512_0129"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_610f4860ff9f",
-      "member_writer_ids": [
-        "uithwdb_49",
-        "vnondb_20160514_0137"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_6381e113cf3b",
-      "member_writer_ids": [
-        "uithwdb_131",
-        "vnondb_20160530_0179"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_675959f34f16",
-      "member_writer_ids": [
-        "uithwdb_100",
-        "vnondb_20160604_0197"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_6b01ffbf9de3",
-      "member_writer_ids": [
-        "uithwdb_22",
-        "vnondb_20160602_0181"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_6d71f5f046cb",
-      "member_writer_ids": [
-        "uithwdb_103"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_71dc2785dcd0",
-      "member_writer_ids": [
-        "uithwdb_244",
-        "vnondb_20150326_0005"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_748be8de5109",
-      "member_writer_ids": [
-        "uithwdb_101",
-        "vnondb_20160411_0083"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_767f92874ae8",
-      "member_writer_ids": [
-        "uithwdb_52",
-        "vnondb_20160428_0108"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_7894a26f1b93",
-      "member_writer_ids": [
-        "uithwdb_27",
-        "vnondb_20140920_0011"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_7c9baa4a7ca9",
-      "member_writer_ids": [
-        "uithwdb_189",
-        "vnondb_20150220_0032"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_7db667d67b18",
-      "member_writer_ids": [
-        "uithwdb_245",
-        "vnondb_20140603_0030"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_7dda37957c53",
-      "member_writer_ids": [
-        "uithwdb_251",
-        "vnondb_20151215_0022"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_8a4a25109110",
-      "member_writer_ids": [
-        "uithwdb_247"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_92c5f3df5dbd",
-      "member_writer_ids": [
-        "uithwdb_6",
-        "vnondb_20150215_0031"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_9c65162769f2",
-      "member_writer_ids": [
-        "uithwdb_34",
-        "vnondb_20160119_0076"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_9e3a3c25bc2c",
-      "member_writer_ids": [
-        "uithwdb_119",
-        "vnondb_20140603_0006"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_a2356bcf4c46",
-      "member_writer_ids": [
-        "uithwdb_238",
-        "vnondb_20160602_0180"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_a31020a93377",
-      "member_writer_ids": [
-        "uithwdb_44",
-        "vnondb_20160530_0177"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_ac6e6833be52",
-      "member_writer_ids": [
-        "uithwdb_151",
-        "vnondb_20150425_0026"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_ba8cb7c5c816",
-      "member_writer_ids": [
-        "uithwdb_248",
-        "vnondb_20160523_0163"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_c1b53aef5e62",
-      "member_writer_ids": [
-        "uithwdb_198"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_c46dd1f934bf",
-      "member_writer_ids": [
-        "uithwdb_26",
-        "vnondb_20160122_0078"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_c567140c958e",
-      "member_writer_ids": [
-        "uithwdb_200",
-        "vnondb_20160517_0140"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_c6a9bc20d5db",
-      "member_writer_ids": [
-        "uithwdb_149"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_c795ce365025",
-      "member_writer_ids": [
-        "uithwdb_215",
-        "vnondb_20160511_0127"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_ce7cce5fae80",
-      "member_writer_ids": [
-        "uithwdb_221",
-        "vnondb_20151109_0045"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_cf28a7ff42ed",
-      "member_writer_ids": [
-        "uithwdb_178",
-        "vnondb_20160604_0196"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_e15f671969d7",
-      "member_writer_ids": [
-        "uithwdb_137",
-        "vnondb_20140603_0004"
-      ],
-      "datasets": [
-        "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
-      ]
-    },
-    {
-      "canonical_writer_id": "vn_writer_e4ac2bec6166",
+      "canonical_writer_id": "uithwdb_1",
       "member_writer_ids": [
         "uithwdb_1"
       ],
@@ -2291,51 +1751,503 @@
       ]
     },
     {
-      "canonical_writer_id": "vn_writer_e82a4b3ff578",
+      "canonical_writer_id": "uithwdb_104",
       "member_writer_ids": [
-        "uithwdb_161",
-        "vnondb_20150212_0022"
+        "uithwdb_104"
       ],
       "datasets": [
         "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
+        "uithwdb_augmented"
       ]
     },
     {
-      "canonical_writer_id": "vn_writer_ea0e5cb40d1a",
+      "canonical_writer_id": "uithwdb_114",
       "member_writer_ids": [
-        "uithwdb_173",
-        "vnondb_20160518_0160"
+        "uithwdb_114"
       ],
       "datasets": [
         "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
+        "uithwdb_augmented"
       ]
     },
     {
-      "canonical_writer_id": "vn_writer_ef678bde1ec0",
+      "canonical_writer_id": "uithwdb_117",
       "member_writer_ids": [
-        "uithwdb_164",
-        "vnondb_20150504_0015"
+        "uithwdb_117"
       ],
       "datasets": [
         "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
+        "uithwdb_augmented"
       ]
     },
     {
-      "canonical_writer_id": "vn_writer_f9cd356332d9",
+      "canonical_writer_id": "uithwdb_122",
       "member_writer_ids": [
-        "uithwdb_223",
-        "vnondb_20151126_0056"
+        "uithwdb_122"
       ],
       "datasets": [
         "uithwdb",
-        "uithwdb_augmented",
-        "vnondb"
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_126",
+      "member_writer_ids": [
+        "uithwdb_126"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_138",
+      "member_writer_ids": [
+        "uithwdb_138"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_139",
+      "member_writer_ids": [
+        "uithwdb_139"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_142",
+      "member_writer_ids": [
+        "uithwdb_142"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_150",
+      "member_writer_ids": [
+        "uithwdb_150"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_152",
+      "member_writer_ids": [
+        "uithwdb_152"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_153",
+      "member_writer_ids": [
+        "uithwdb_153"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_159",
+      "member_writer_ids": [
+        "uithwdb_159"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_160",
+      "member_writer_ids": [
+        "uithwdb_160"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_165",
+      "member_writer_ids": [
+        "uithwdb_165"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_169",
+      "member_writer_ids": [
+        "uithwdb_169"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_174",
+      "member_writer_ids": [
+        "uithwdb_174"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_176",
+      "member_writer_ids": [
+        "uithwdb_176"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_177",
+      "member_writer_ids": [
+        "uithwdb_177"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_182",
+      "member_writer_ids": [
+        "uithwdb_182"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_184",
+      "member_writer_ids": [
+        "uithwdb_184"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_185",
+      "member_writer_ids": [
+        "uithwdb_185"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_195",
+      "member_writer_ids": [
+        "uithwdb_195"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_198",
+      "member_writer_ids": [
+        "uithwdb_198"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_20",
+      "member_writer_ids": [
+        "uithwdb_20"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_206",
+      "member_writer_ids": [
+        "uithwdb_206"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_209",
+      "member_writer_ids": [
+        "uithwdb_209"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_210",
+      "member_writer_ids": [
+        "uithwdb_210"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_216",
+      "member_writer_ids": [
+        "uithwdb_216"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_226",
+      "member_writer_ids": [
+        "uithwdb_226"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_229",
+      "member_writer_ids": [
+        "uithwdb_229"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_231",
+      "member_writer_ids": [
+        "uithwdb_231"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_233",
+      "member_writer_ids": [
+        "uithwdb_233"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_239",
+      "member_writer_ids": [
+        "uithwdb_239"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_248",
+      "member_writer_ids": [
+        "uithwdb_248"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_251",
+      "member_writer_ids": [
+        "uithwdb_251"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_253",
+      "member_writer_ids": [
+        "uithwdb_253"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_29",
+      "member_writer_ids": [
+        "uithwdb_29"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_4",
+      "member_writer_ids": [
+        "uithwdb_4"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_44",
+      "member_writer_ids": [
+        "uithwdb_44"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_5",
+      "member_writer_ids": [
+        "uithwdb_5"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_52",
+      "member_writer_ids": [
+        "uithwdb_52"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_6",
+      "member_writer_ids": [
+        "uithwdb_6"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_60",
+      "member_writer_ids": [
+        "uithwdb_60"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_61",
+      "member_writer_ids": [
+        "uithwdb_61"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_62",
+      "member_writer_ids": [
+        "uithwdb_62"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_69",
+      "member_writer_ids": [
+        "uithwdb_69"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_70",
+      "member_writer_ids": [
+        "uithwdb_70"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_88",
+      "member_writer_ids": [
+        "uithwdb_88"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_94",
+      "member_writer_ids": [
+        "uithwdb_94"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
+      ]
+    },
+    {
+      "canonical_writer_id": "uithwdb_97",
+      "member_writer_ids": [
+        "uithwdb_97"
+      ],
+      "datasets": [
+        "uithwdb",
+        "uithwdb_augmented"
       ]
     }
   ]

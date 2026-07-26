@@ -13,16 +13,9 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from PIL import Image, ImageOps
-
 from vietparadiff.data.contracts import (
     eligible_reference,
     excluded_source_line_ids,
-)
-from vietparadiff.data.crosswalk import (
-    WriterCoverage,
-    evidence_digest,
-    load_writer_crosswalk,
 )
 from vietparadiff.models.config import TextEncoderConfig
 from vietparadiff.models.grapheme import (
@@ -36,13 +29,12 @@ from vietparadiff.models.grapheme import (
 __all__ = [
     "SplitConfig",
     "create_data_splits",
-    "generate_writer_crosswalk_candidates",
 ]
 
 
-REAL_DATASETS = ("cvl", "iam", "uithwdb", "vnondb")
+REAL_DATASETS = ("cvl", "iam", "uithwdb")
 ALL_DATASETS = REAL_DATASETS + ("uithwdb_augmented",)
-VIETNAMESE_DATASETS = ("uithwdb", "vnondb")
+VIETNAMESE_DATASETS = ("uithwdb",)
 
 
 def _sha256_path(path: Path) -> str:
@@ -59,9 +51,6 @@ class SplitConfig:
 
     data_root: Path = Path("data")
     output_root: Path = Path("data/splits")
-    writer_crosswalk: Path = Path(
-        "data/metadata/vietnamese_writer_crosswalk.json"
-    )
     test_fraction: float = 0.2
     seed: int = 42
     overwrite: bool = False
@@ -71,8 +60,6 @@ class SplitConfig:
             raise TypeError("data_root phải là pathlib.Path.")
         if not isinstance(self.output_root, Path):
             raise TypeError("output_root phải là pathlib.Path.")
-        if not isinstance(self.writer_crosswalk, Path):
-            raise TypeError("writer_crosswalk phải là pathlib.Path.")
         if not 0.0 < self.test_fraction < 1.0:
             raise ValueError("test_fraction phải nằm trong (0, 1).")
         if not isinstance(self.seed, int):
@@ -166,214 +153,37 @@ def _flat_text(text: str) -> str:
     return " ".join(text.split())
 
 
-@lru_cache(maxsize=None)
-def _image_fingerprint(path_text: str) -> tuple[float, ...]:
-    path = Path(path_text)
-    if not path.is_file():
-        raise FileNotFoundError(f"Writer-signature image not found: {path}")
-    with Image.open(path) as source:
-        image = ImageOps.grayscale(source)
-        foreground = image.point(
-            lambda value: 255 if value < 243 else 0
-        )
-        box = foreground.getbbox()
-        if box is not None:
-            image = image.crop(box)
-        image.thumbnail((128, 64), Image.Resampling.LANCZOS)
-        canvas = Image.new("L", (128, 64), 255)
-        canvas.paste(
-            image,
-            ((128 - image.width) // 2, (64 - image.height) // 2),
-        )
-        return tuple((255 - value) / 255.0 for value in canvas.tobytes())
-
-
-def _fingerprint_distance(left: str, right: str) -> float:
-    left_values = _image_fingerprint(left)
-    right_values = _image_fingerprint(right)
-    return sum(
-        (left_value - right_value) ** 2
-        for left_value, right_value in zip(
-            left_values,
-            right_values,
-            strict=True,
-        )
-    ) / len(left_values)
-
-
-def _paragraphs_by_writer(
-    records: Sequence[dict[str, object]],
-) -> dict[str, list[dict[str, object]]]:
-    grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
-    for record in records:
-        if record["level"] == "paragraph":
-            grouped[str(record["writer_id"])].append(record)
-    return dict(grouped)
-
-
-def _candidate_vietnamese_writers(
-    uithwdb: Sequence[dict[str, object]],
-    vnondb: Sequence[dict[str, object]],
-) -> list[dict[str, object]]:
-    """Produce review evidence without making an identity decision."""
-    uit = _paragraphs_by_writer(uithwdb)
-    vnon = _paragraphs_by_writer(vnondb)
-    if not uit or not vnon:
-        raise ValueError("UIT-HWDB và VNOnDB phải có paragraph records.")
-
-    candidates: list[dict[str, object]] = []
-    for vnon_writer in sorted(vnon):
-        vnon_by_text = {
-            _flat_text(str(record["text"])): record
-            for record in vnon[vnon_writer]
-        }
-        scores: list[tuple[int, float, str, int]] = []
-        for uit_writer in sorted(uit):
-            uit_by_text = {
-                _flat_text(str(record["text"])): record
-                for record in uit[uit_writer]
-            }
-            shared_texts = sorted(set(vnon_by_text) & set(uit_by_text))
-            if not shared_texts:
-                continue
-            visual_distance = sum(
-                _fingerprint_distance(
-                    str(vnon_by_text[text]["image"]),
-                    str(uit_by_text[text]["image"]),
-                )
-                for text in shared_texts
-            ) / len(shared_texts)
-            scores.append(
-                (
-                    -len(shared_texts),
-                    visual_distance,
-                    uit_writer,
-                    len(uit_by_text),
-                )
-            )
-        scores.sort()
-        ranked = [
-            {
-                "uithwdb_writer_id": score[2],
-                "shared_paragraph_count": -score[0],
-                "visual_distance": score[1],
-                "uithwdb_paragraph_count": score[3],
-            }
-            for score in scores
-        ]
-        payload: dict[str, object] = {
-            "vnondb_writer_id": vnon_writer,
-            "vnondb_paragraph_count": len(vnon_by_text),
-            "ranked_candidates": ranked,
-        }
-        payload["evidence_sha256"] = evidence_digest(payload)
-        candidates.append(payload)
-    return candidates
-
-
-def generate_writer_crosswalk_candidates(
-    data_root: Path,
-) -> dict[str, object]:
-    """Generate deterministic evidence that still requires human approval."""
-    uit = _load_manifest(
-        data_root / "uithwdb" / "manifest.jsonl",
-        "uithwdb",
-    )
-    vnon = _load_manifest(
-        data_root / "vnondb" / "manifest.jsonl",
-        "vnondb",
-    )
-    return {
-        "schema_version": 1,
-        "status": "candidate_only",
-        "uithwdb_writer_ids": sorted(
-            {str(record["writer_id"]) for record in uit}
-        ),
-        "vnondb_writer_ids": sorted(
-            {str(record["writer_id"]) for record in vnon}
-        ),
-        "candidates": _candidate_vietnamese_writers(uit, vnon),
-    }
-
-
 def _canonical_writer_map(
     manifests: Mapping[str, Sequence[dict[str, object]]],
-    coverage: WriterCoverage,
 ) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
     mapping: dict[str, str] = {}
     families: dict[str, tuple[str, ...]] = {}
 
-    for dataset in ("cvl", "iam"):
+    for dataset in REAL_DATASETS:
         writer_ids = sorted(
             {str(record["writer_id"]) for record in manifests[dataset]}
         )
         for writer_id in writer_ids:
+            if writer_id in mapping:
+                raise ValueError(
+                    "Writer ID collision giữa normalized datasets: "
+                    f"{writer_id}."
+                )
             mapping[writer_id] = writer_id
             families[writer_id] = (writer_id,)
 
-    all_uit = {
+    real_uit_writers = {
         str(record["writer_id"]) for record in manifests["uithwdb"]
     }
-    all_vnon = {
-        str(record["writer_id"]) for record in manifests["vnondb"]
-    }
-    all_vietnamese = all_uit | all_vnon
-    covered = (
-        coverage.approved_writer_ids
-        | coverage.proven_independent
-        | coverage.unresolved
-        | coverage.excluded
-    )
-    if covered != all_vietnamese:
-        raise ValueError(
-            "Crosswalk coverage không khớp source writers: "
-            f"missing={sorted(all_vietnamese - covered)}, "
-            f"unknown={sorted(covered - all_vietnamese)}."
-        )
-    for pair in sorted(
-        coverage.approved,
-        key=lambda item: (
-            item.uithwdb_writer_id,
-            item.vnondb_writer_id,
-        ),
-    ):
-        uit_writer = pair.uithwdb_writer_id
-        vnon_writer = pair.vnondb_writer_id
-        if uit_writer not in all_uit or vnon_writer not in all_vnon:
-            raise ValueError(
-                "Approved crosswalk pair không thuộc đúng source dataset: "
-                f"{uit_writer}, {vnon_writer}."
-            )
-        members = tuple(sorted((uit_writer, vnon_writer)))
-        digest = hashlib.sha256("\n".join(members).encode()).hexdigest()[:12]
-        canonical_id = f"vn_writer_{digest}"
-        if canonical_id in families:
-            raise RuntimeError(f"Canonical writer collision: {canonical_id}")
-        families[canonical_id] = members
-        mapping[uit_writer] = canonical_id
-        mapping[vnon_writer] = canonical_id
-
-    for writer in sorted(coverage.proven_independent):
-        if writer not in all_vietnamese:
-            raise ValueError(f"Unknown proven-independent writer: {writer}.")
-        digest = hashlib.sha256(writer.encode()).hexdigest()[:12]
-        canonical_id = f"vn_writer_{digest}"
-        if canonical_id in families:
-            raise RuntimeError(f"Canonical writer collision: {canonical_id}")
-        families[canonical_id] = (writer,)
-        mapping[writer] = canonical_id
-
     augmented_writers = {
         str(record["writer_id"])
         for record in manifests["uithwdb_augmented"]
     }
-    # Synthetic records from unresolved/excluded writers are intentionally
-    # quarantined when stage records are filtered.
-    unknown_augmented = augmented_writers - all_uit
+    unknown_augmented = augmented_writers - real_uit_writers
     if unknown_augmented:
-        raise RuntimeError(
+        raise ValueError(
             "Synthetic writer không tồn tại trong UIT-HWDB: "
-            f"{sorted(unknown_augmented)}"
+            f"{sorted(unknown_augmented)}."
         )
     return mapping, families
 
@@ -389,8 +199,8 @@ def _writer_splits(
             group = "cvl"
         elif canonical_id.startswith("iam_"):
             group = "iam"
-        elif canonical_id.startswith("vn_writer_"):
-            group = "vietnamese"
+        elif canonical_id.startswith("uithwdb_"):
+            group = "uithwdb"
         else:
             raise RuntimeError(
                 f"Unknown canonical writer family: {canonical_id} {members}"
@@ -999,8 +809,7 @@ def create_data_splits(
         )
         for dataset in ALL_DATASETS
     }
-    coverage = load_writer_crosswalk(config.writer_crosswalk)
-    writer_map, families = _canonical_writer_map(manifests, coverage)
+    writer_map, families = _canonical_writer_map(manifests)
     train_writers, test_writers = _writer_splits(
         families,
         config.test_fraction,
@@ -1014,23 +823,6 @@ def create_data_splits(
         test_writers,
         config,
     )
-    writer_files["writers/crosswalk_coverage.json"] = {
-        "schema_version": 1,
-        "crosswalk_path": str(config.writer_crosswalk.resolve()),
-        "crosswalk_sha256": coverage.artifact_sha256,
-        "candidate_report_sha256": coverage.candidate_report_sha256,
-        "approved": [
-            {
-                "uithwdb_writer_id": pair.uithwdb_writer_id,
-                "vnondb_writer_id": pair.vnondb_writer_id,
-                "evidence_sha256": pair.evidence_sha256,
-            }
-            for pair in coverage.approved
-        ],
-        "proven_independent": sorted(coverage.proven_independent),
-        "unresolved": sorted(coverage.unresolved),
-        "excluded": sorted(coverage.excluded),
-    }
     _write_outputs(
         config.output_root,
         writer_files,
@@ -1043,7 +835,4 @@ def create_data_splits(
     }
     counts["writers/train.json"] = len(train_writers)
     counts["writers/test.json"] = len(test_writers)
-    counts["writers/quarantined"] = len(
-        coverage.unresolved | coverage.excluded
-    )
     return counts

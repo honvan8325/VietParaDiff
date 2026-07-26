@@ -163,7 +163,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     preferred = (
         ("uithwdb", 384),
-        ("vnondb", 512),
         ("cvl", 896),
         ("iam", 1280),
     )

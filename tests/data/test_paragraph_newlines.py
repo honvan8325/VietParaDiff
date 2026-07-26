@@ -8,11 +8,10 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from vietparadiff.data import uithwdb, vnondb
+from vietparadiff.data import uithwdb
 from vietparadiff.data.paragraph_labels import (
     align_sequential_paragraph_lines,
     join_paragraph_lines,
-    split_indexed_line_stem,
 )
 
 
@@ -42,10 +41,6 @@ def test_line_label_helpers_preserve_content_and_order() -> None:
             matches["p1.png"],
         )
         == "Dòng một\nDòng hai"
-    )
-    assert split_indexed_line_stem("writer_document_3_12") == (
-        "writer_document_3",
-        12,
     )
 
 
@@ -137,43 +132,3 @@ def test_uithwdb_builder_rejects_missing_native_line_alignment(
     assert {
         item["reason"] for item in report["expected_rejections"]
     } == {"missing_native_line_alignment"}
-
-
-def test_vnondb_builder_uses_parent_line_ids(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    level_dirs = {
-        level: tmp_path / f"raw_{level}"
-        for level in ("word", "line", "paragraph")
-    }
-    for root in level_dirs.values():
-        root.mkdir(parents=True)
-
-    paragraph_stem = "20240101_0001_document_0"
-    save_image(level_dirs["paragraph"] / f"{paragraph_stem}.png")
-    (level_dirs["paragraph"] / f"{paragraph_stem}.txt").write_text(
-        "Dòng một Dòng hai",
-        encoding="utf-8",
-    )
-    for index, text in ((0, "Dòng một"), (1, "Dòng hai")):
-        stem = f"{paragraph_stem}_{index}"
-        save_image(level_dirs["line"] / f"{stem}.png")
-        (level_dirs["line"] / f"{stem}.txt").write_text(
-            text,
-            encoding="utf-8",
-        )
-
-    output = tmp_path / "vnondb"
-    monkeypatch.setattr(vnondb, "LEVEL_DIRS", level_dirs)
-    monkeypatch.setattr(vnondb, "OUT", output)
-    monkeypatch.setattr(vnondb, "IMAGES", output / "images")
-    monkeypatch.setattr(vnondb, "MANIFEST", output / "manifest.jsonl")
-
-    vnondb.build_vnondb_dataset()
-
-    records = read_manifest(output / "manifest.jsonl")
-    paragraph = next(
-        record for record in records if record["level"] == "paragraph"
-    )
-    assert paragraph["text"] == "Dòng một\nDòng hai"

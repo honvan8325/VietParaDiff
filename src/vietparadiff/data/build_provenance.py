@@ -30,9 +30,8 @@ BUILDER_CONFIGS: dict[str, dict[str, object]] = {
     },
     "uithwdb": {
         "native_line_alignment_required": True,
-        "cross_dataset_fallback": False,
+        "external_annotation_fallback": False,
     },
-    "vnondb": {"levels": ["paragraph", "line", "word"]},
 }
 
 
@@ -119,6 +118,7 @@ def raw_inventory_sha256(root: Path) -> str:
 
 
 def git_provenance() -> dict[str, object]:
+    source_scope = ("src", "scripts", "pyproject.toml", "uv.lock")
     commit = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         check=True,
@@ -126,7 +126,7 @@ def git_provenance() -> dict[str, object]:
         text=True,
     ).stdout.strip()
     patch = subprocess.run(
-        ["git", "diff", "--binary", "HEAD", "--", "."],
+        ["git", "diff", "--binary", "HEAD", "--", *source_scope],
         check=True,
         capture_output=True,
     ).stdout
@@ -139,11 +139,15 @@ def git_provenance() -> dict[str, object]:
     untracked_entries: list[str] = []
     for value in untracked_output.splitlines():
         path = Path(value)
-        if path.is_file():
+        if path.is_file() and (
+            value in {"pyproject.toml", "uv.lock"}
+            or value.startswith(("src/", "scripts/"))
+        ):
             untracked_entries.append(f"{value}:{sha256_file(path)}")
     untracked_hash = _canonical_sha256(sorted(untracked_entries))
     return {
         "commit": commit,
+        "source_scope": list(source_scope),
         "dirty": bool(patch or untracked_entries),
         "dirty_patch_sha256": hashlib.sha256(patch).hexdigest(),
         "untracked_inventory_sha256": untracked_hash,

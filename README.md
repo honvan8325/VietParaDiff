@@ -1,12 +1,15 @@
 # VietParaDiff
 
-VietParaDiff provides a common data-building pipeline for four handwriting
+VietParaDiff provides a common data-building pipeline for three handwriting
 corpora:
 
 - CVL
 - IAM
 - UIT-HWDB
-- VNOnDB
+
+Vietnamese domain adaptation and held-out-writer evaluation use UIT-HWDB
+only. Synthetic Vietnamese paragraphs are assembled from UIT-HWDB training
+lines and are never used for evaluation.
 
 The builders convert the original dataset layouts into one shared format:
 width-limited grayscale PNG images plus a UTF-8 JSON Lines manifest. Each
@@ -101,22 +104,15 @@ data/raw/
 │       ├── ascii/ascii/forms.txt
 │       ├── forms/forms/
 │       └── xml/
-├── UIT_HWDB/
+└── UIT_HWDB/
 │   ├── UIT_HWDB_word/
 │   ├── UIT_HWDB_line/
 │   └── UIT_HWDB_paragraph/
-└── VNOnDB/
-    └── Data_processed/
-        ├── InkData_word_processed/
-        ├── InkData_line_processed/
-        └── InkData_paragraph_processed/
 ```
 
 UIT-HWDB level directories must contain the original `train_data` and
 `test_data` writer directories. Each writer directory is expected to contain
 a `label.json` file and its referenced images.
-
-VNOnDB expects every source PNG to have a same-stem `.txt` transcript file.
 
 ## Building a dataset
 
@@ -126,7 +122,6 @@ Run the dispatcher with exactly one dataset name:
 uv run python scripts/build_dataset.py cvl
 uv run python scripts/build_dataset.py iam
 uv run python scripts/build_dataset.py uithwdb
-uv run python scripts/build_dataset.py vnondb
 ```
 
 The dispatcher builds in a same-filesystem staging directory and replaces
@@ -236,34 +231,19 @@ Current generated manifests contain:
 | CVL | 310 | 1,598 | 13,440 | 99,899 | 114,937 |
 | IAM | 657 | 1,539 | 13,353 | 96,422 | 111,314 |
 | UIT-HWDB | 255 | 1,144 | 7,229 | 110,488 | 118,861 |
-| VNOnDB | 224 | 1,144 | 7,296 | 110,746 | 119,186 |
-| **Total** | **1,446** | **5,425** | **41,318** | **417,555** | **464,298** |
+| **Total** | **1,222** | **4,281** | **34,022** | **306,809** | **345,112** |
 
 ## Creating training splits
 
-First generate review evidence for the UIT-HWDB/VNOnDB writer crosswalk:
-
-```bash
-uv run python scripts/prepare_writer_crosswalk.py
-```
-
-This command never approves identities. Review its evidence and create
-`data/metadata/vietnamese_writer_crosswalk.json` with explicit `approved`,
-`proven_independent`, `unresolved`, and `excluded` states. Unresolved writers
-are quarantined and cannot enter a paper split.
-Every `proven_independent` decision must include `evidence_path` and the
-current SHA-256 of that file; a free-form reason or hash-shaped placeholder
-is not accepted.
-
-Build all stage-specific manifests after the five normalized manifests
-(`cvl`, `iam`, `uithwdb`, `vnondb`, and `uithwdb_augmented`) are available:
+Build all stage-specific manifests after the three normalized real manifests
+(`cvl`, `iam`, and `uithwdb`) plus `uithwdb_augmented` are available:
 
 ```bash
 uv run python scripts/create_splits.py
 ```
 
-The default split is deterministic, writer-disjoint, stratified by corpus
-family, and reserves 20% of canonical writers for test with seed 42. Change
+The default split is deterministic, writer-disjoint within each corpus, and
+reserves 20% of writers for test with seed 42. Change
 these values explicitly when needed:
 
 ```bash
@@ -273,11 +253,10 @@ uv run python scripts/create_splits.py \
   --overwrite
 ```
 
-UIT-HWDB and VNOnDB writers are canonicalized only through the reviewed,
-one-to-one crosswalk. Transcript/image similarity is candidate evidence, not
-an automatic identity decision. The split command fails on incomplete
-coverage and excludes every unresolved writer. Synthetic UIT-HWDB paragraphs
-inherit an approved source writer's split and are train-only.
+CVL, IAM, and UIT-HWDB writers are split independently within their corpus.
+For every record, `canonical_writer_id` equals the dataset-prefixed
+`writer_id`. Synthetic UIT-HWDB paragraphs inherit their source writer's
+training split and never enter test manifests.
 
 The command writes:
 
@@ -430,12 +409,6 @@ line and paragraph content, but their word crops are excluded.
 UIT-HWDB provides separate paragraph, line, and word exports. The builder
 normalizes all three layouts through the same `label.json`-based path and
 orders numeric filenames deterministically.
-
-### VNOnDB
-
-VNOnDB writer identifiers are derived from the first two underscore-separated
-fields of each source filename. Image/transcript pairs that are missing,
-empty, undecodable, or invalid are logged and skipped.
 
 ## Training and generation
 
@@ -664,8 +637,8 @@ every manifest SHA-256, an image
 inventory SHA-256, and a combined dataset snapshot SHA-256. Paper preflight
 recomputes this snapshot without decoding images and rejects a stale report
 when any split manifest, referenced image, normalized source manifest, build
-report, writer split, crosswalk, candidate report, or independence evidence
-has changed. Audit also recomputes each raw inventory and verifies builder
+report, writer split, or augmented-source manifest has changed. Audit also
+recomputes each raw inventory and verifies builder
 config, Git commit/dirty-patch provenance, issue-list counts, accepted record
 count, and output-manifest hash.
 

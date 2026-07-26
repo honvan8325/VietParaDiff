@@ -24,13 +24,11 @@ from vietparadiff.data.pipeline import (
     collate_htr,
 )
 from vietparadiff.data.uithwdb import build_uithwdb_dataset
-from vietparadiff.data.vnondb import build_vnondb_dataset
 
 __all__ = [
     "build_cvl_dataset",
     "build_iam_dataset",
     "build_uithwdb_dataset",
-    "build_vnondb_dataset",
     "SplitConfig",
     "create_data_splits",
     "ParagraphImageProcessor",

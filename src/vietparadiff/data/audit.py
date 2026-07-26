@@ -24,7 +24,6 @@ from vietparadiff.data.build_provenance import (
     git_provenance,
     raw_inventory_sha256,
 )
-from vietparadiff.data.crosswalk import load_writer_crosswalk
 from vietparadiff.data.pipeline import (
     HTRImageProcessor,
     HTRVocabulary,
@@ -34,6 +33,8 @@ from vietparadiff.models.grapheme import (
     GraphemeVocabulary,
     ParagraphFormatter,
 )
+
+NORMALIZED_REAL_DATASETS = ("cvl", "iam", "uithwdb")
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,49 +175,13 @@ def _image_info(path: Path) -> tuple[int, int, str, str]:
 def _provenance_hashes(split_root: Path) -> dict[str, str]:
     data_root = split_root.parent
     provenance_paths: set[Path] = set()
-    for dataset in ("cvl", "iam", "uithwdb", "vnondb"):
+    for dataset in NORMALIZED_REAL_DATASETS:
         provenance_paths.add(data_root / dataset / "manifest.jsonl")
         provenance_paths.add(data_root / dataset / "build_report.json")
+    provenance_paths.add(
+        data_root / "uithwdb_augmented" / "manifest.jsonl"
+    )
     provenance_paths.update((split_root / "writers").glob("*.json"))
-    coverage_path = split_root / "writers" / "crosswalk_coverage.json"
-    if coverage_path.is_file():
-        try:
-            coverage = json.loads(
-                coverage_path.read_text(encoding="utf-8")
-            )
-            crosswalk_value = coverage.get("crosswalk_path")
-            if isinstance(crosswalk_value, str) and crosswalk_value:
-                crosswalk_path = Path(crosswalk_value)
-                provenance_paths.add(crosswalk_path)
-                if crosswalk_path.is_file():
-                    crosswalk = json.loads(
-                        crosswalk_path.read_text(encoding="utf-8")
-                    )
-                    candidate_value = crosswalk.get("candidate_report")
-                    if (
-                        isinstance(candidate_value, str)
-                        and candidate_value
-                    ):
-                        candidate = Path(candidate_value)
-                        provenance_paths.add(candidate)
-                    for decision in crosswalk.get(
-                        "proven_independent",
-                        [],
-                    ):
-                        if isinstance(decision, Mapping):
-                            evidence_value = decision.get(
-                                "evidence_path"
-                            )
-                            if (
-                                isinstance(evidence_value, str)
-                                and evidence_value
-                            ):
-                                evidence = Path(evidence_value)
-                                provenance_paths.add(evidence)
-        except (OSError, ValueError, json.JSONDecodeError) as error:
-            # The strict auditor reports the parse failure; retaining only
-            # the coverage file hash still makes freshness deterministic.
-            del error
     return {
         _relative_key(path, data_root): (
             _file_sha256(path) if path.is_file() else "<missing>"
@@ -631,7 +596,7 @@ class DatasetAuditor:
     ) -> None:
         data_root = self.split_root.parent
         current_git = git_provenance()
-        for dataset in ("cvl", "iam", "uithwdb", "vnondb"):
+        for dataset in NORMALIZED_REAL_DATASETS:
             report_path = data_root / dataset / "build_report.json"
             manifest = data_root / dataset / "manifest.jsonl"
             if not report_path.is_file():
@@ -803,121 +768,32 @@ class DatasetAuditor:
                     "Build report không bind current normalized manifest.",
                 )
 
-        coverage_path = (
-            self.split_root / "writers" / "crosswalk_coverage.json"
-        )
-        if not coverage_path.is_file():
-            self._issue(
-                "missing_crosswalk_coverage",
-                coverage_path,
-                "-",
-                "Split thiếu crosswalk coverage artifact.",
-            )
-            return
-        try:
-            coverage = json.loads(
-                coverage_path.read_text(encoding="utf-8")
-            )
-            unresolved = set(coverage["unresolved"])
-            excluded = set(coverage["excluded"])
-            crosswalk_path = Path(str(coverage["crosswalk_path"]))
-            if (
-                not crosswalk_path.is_file()
-                or _file_sha256(crosswalk_path)
-                != coverage["crosswalk_sha256"]
-            ):
-                raise ValueError("Crosswalk source hash mismatch.")
-            reviewed = load_writer_crosswalk(crosswalk_path)
-            source_writers: set[str] = set()
-            for dataset in ("uithwdb", "vnondb"):
-                source_manifest = data_root / dataset / "manifest.jsonl"
-                source_writers.update(
-                    str(record["writer_id"])
-                    for record in _records(source_manifest)
-                )
-            reviewed_writers = (
-                reviewed.approved_writer_ids
-                | reviewed.proven_independent
-                | reviewed.unresolved
-                | reviewed.excluded
-            )
-            if source_writers != reviewed_writers:
-                raise ValueError(
-                    "Crosswalk không cover current source writers: "
-                    f"missing={sorted(source_writers-reviewed_writers)}, "
-                    f"unknown={sorted(reviewed_writers-source_writers)}."
-                )
-        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
-            self._issue(
-                "crosswalk_coverage_contract",
-                coverage_path,
-                "-",
-                str(error),
-            )
-            return
-        quarantined = unresolved | excluded
-        canonical_by_raw: dict[str, str] = {}
-        for pair in reviewed.approved:
-            members = tuple(
-                sorted(
-                    (
-                        pair.uithwdb_writer_id,
-                        pair.vnondb_writer_id,
-                    )
-                )
-            )
-            canonical = "vn_writer_" + hashlib.sha256(
-                "\n".join(members).encode("utf-8")
-            ).hexdigest()[:12]
-            canonical_by_raw[pair.uithwdb_writer_id] = canonical
-            canonical_by_raw[pair.vnondb_writer_id] = canonical
-        for writer in reviewed.proven_independent:
-            canonical_by_raw[writer] = "vn_writer_" + hashlib.sha256(
-                writer.encode("utf-8")
-            ).hexdigest()[:12]
-        recomputed_uses: dict[str, set[str]] = defaultdict(set)
         for manifest, records in loaded.items():
             if manifest.name == "rejected_targets.jsonl":
                 continue
             for record in records:
-                raw_writer = record.get("writer_id")
-                if isinstance(raw_writer, str) and raw_writer in quarantined:
-                    self._issue(
-                        "unresolved_writer_in_split",
-                        manifest,
-                        record.get("id", record.get("pair_id", "-")),
-                        raw_writer,
-                    )
+                writer_id = record.get("writer_id")
+                if writer_id is None:
+                    continue
                 if (
-                    isinstance(raw_writer, str)
-                    and raw_writer in canonical_by_raw
+                    not isinstance(writer_id, str)
+                    or not writer_id
+                    or record.get("canonical_writer_id") != writer_id
                 ):
-                    expected_canonical = canonical_by_raw[raw_writer]
-                    actual_canonical = record.get(
-                        "canonical_writer_id"
+                    self._issue(
+                        "canonical_writer_identity",
+                        manifest,
+                        str(
+                            record.get(
+                                "id",
+                                record.get("pair_id", "-"),
+                            )
+                        ),
+                        (
+                            "Pipeline UIT-HWDB-only yêu cầu "
+                            "canonical_writer_id == writer_id."
+                        ),
                     )
-                    if actual_canonical != expected_canonical:
-                        self._issue(
-                            "canonical_writer_mapping",
-                            manifest,
-                            record.get("id", record.get("pair_id", "-")),
-                            (
-                                f"raw={raw_writer}, "
-                                f"expected={expected_canonical}, "
-                                f"actual={actual_canonical}."
-                            ),
-                        )
-                    recomputed_uses[expected_canonical].add(
-                        _split_kind(manifest)
-                    )
-        for canonical, uses in recomputed_uses.items():
-            if uses == {"train", "test"}:
-                self._issue(
-                    "recomputed_writer_leakage",
-                    coverage_path,
-                    canonical,
-                    "Leakage sau khi tự recompute approved canonical mapping.",
-                )
 
     def _formatter(self) -> ParagraphFormatter:
         vocabulary = GraphemeVocabulary.default_vietnamese()

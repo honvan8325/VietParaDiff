@@ -51,14 +51,3 @@ def align_sequential_paragraph_lines(
             unmatched.append(paragraph_id)
 
     return matches, tuple(unmatched)
-
-
-def split_indexed_line_stem(line_stem: str) -> tuple[str, int]:
-    """Return the paragraph stem and numeric line index from a VNOnDB line stem."""
-    paragraph_stem, separator, index_text = line_stem.rpartition("_")
-    if not separator or not paragraph_stem or not index_text.isdigit():
-        raise ValueError(
-            "VNOnDB line stem phải kết thúc bằng chỉ số dòng số nguyên, "
-            f"nhận {line_stem!r}."
-        )
-    return paragraph_stem, int(index_text)

@@ -15,14 +15,12 @@ from vietparadiff.data import (
     build_cvl_dataset,
     build_iam_dataset,
     build_uithwdb_dataset,
-    build_vnondb_dataset,
 )
 
 DATASET_BUILDERS: dict[str, Callable[[], None]] = {
     "cvl": build_cvl_dataset,
     "iam": build_iam_dataset,
     "uithwdb": build_uithwdb_dataset,
-    "vnondb": build_vnondb_dataset,
 }
 
 
