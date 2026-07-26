@@ -1021,7 +1021,7 @@ class AutoKLTrainer:
         accumulation = self.config.data.gradient_accumulation_steps
         total_batches = len(loader)
         group_size = min(accumulation, total_batches)
-        group_metrics: list[AutoKLLosses] = []
+        group_metrics: list[dict[str, float]] = []
         group_bucket = 0
         for batch_index, batch in enumerate(loader):
             images = batch.get("images")
@@ -1043,24 +1043,38 @@ class AutoKLTrainer:
                 images,
                 accumulation_divisor=group_size,
             )
-            group_metrics.append(losses)
             group_bucket = bucket
             batch_size = images.shape[0]
             sample_count += batch_size
-            sums["total"] += float(losses.total.detach().cpu()) * batch_size
-            sums["reconstruction"] += (
-                float(losses.reconstruction.detach().cpu()) * batch_size
-            )
-            sums["edge"] += float(losses.edge.detach().cpu()) * batch_size
-            sums["kl"] += float(losses.kl.detach().cpu()) * batch_size
-            sums["checkpoint"] += (
-                float(losses.checkpoint_score.detach().cpu()) * batch_size
-            )
+            metric = {
+                "total": float(losses.total.detach().cpu()),
+                "reconstruction": float(
+                    losses.reconstruction.detach().cpu()
+                ),
+                "edge": float(losses.edge.detach().cpu()),
+                "kl": float(losses.kl.detach().cpu()),
+                "checkpoint": float(
+                    losses.checkpoint_score.detach().cpu()
+                ),
+                "kl_weight": losses.kl_weight,
+            }
+            group_metrics.append(metric)
+            for name in (
+                "total",
+                "reconstruction",
+                "edge",
+                "kl",
+                "checkpoint",
+            ):
+                sums[name] += metric[name] * batch_size
             is_group_end = (
                 len(group_metrics) == group_size
                 or batch_index + 1 == total_batches
             )
             if not is_group_end:
+                del output, losses
+                if self.runtime.device.type == "mps":
+                    torch.mps.empty_cache()
                 continue
             gradient_norm = self.optimizer_step()
             if (
@@ -1072,26 +1086,26 @@ class AutoKLTrainer:
                 self.logger.log_scalars(
                     {
                         "train/total_loss": sum(
-                            float(item.total.detach().cpu())
+                            item["total"]
                             for item in group_metrics
                         )
                         / count,
                         "train/reconstruction_loss": sum(
-                            float(item.reconstruction.detach().cpu())
+                            item["reconstruction"]
                             for item in group_metrics
                         )
                         / count,
                         "train/edge_loss": sum(
-                            float(item.edge.detach().cpu())
+                            item["edge"]
                             for item in group_metrics
                         )
                         / count,
                         "train/kl_loss": sum(
-                            float(item.kl.detach().cpu())
+                            item["kl"]
                             for item in group_metrics
                         )
                         / count,
-                        "train/kl_weight": last.kl_weight,
+                        "train/kl_weight": last["kl_weight"],
                         "train/latent_mean": float(
                             output.latent.detach().float().mean().cpu()
                         ),
@@ -1119,6 +1133,9 @@ class AutoKLTrainer:
                     for height, sample in sorted(cached_images.items())
                 }
                 self.logger.log_images(panels, step=self.global_step)
+            del output, losses
+            if self.runtime.device.type == "mps":
+                torch.mps.empty_cache()
         if sample_count <= 0:
             raise RuntimeError("Train epoch không xử lý sample nào.")
         return EpochMetrics(
@@ -1182,6 +1199,9 @@ class AutoKLTrainer:
                     labels=labels,
                 )
                 rendered.add(bucket)
+            del output, losses, images
+            if self.runtime.device.type == "mps":
+                torch.mps.empty_cache()
         if sample_count <= 0:
             raise ValueError("Evaluation loader không được rỗng.")
         metrics = EpochMetrics(

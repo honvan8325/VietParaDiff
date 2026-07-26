@@ -45,7 +45,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("config.yaml"),
+        default=Path("configs/autokl.yaml"),
         help="YAML training configuration.",
     )
     parser.add_argument(

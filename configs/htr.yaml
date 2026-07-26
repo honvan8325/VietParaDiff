@@ -1,0 +1,50 @@
+seed: 42
+device: auto
+precision: auto
+
+data:
+  train_lines: data/splits/htr/train_lines.jsonl
+  train_words: data/splits/htr/train_words.jsonl
+  test_lines: data/splits/htr/test_lines.jsonl
+  test_words: data/splits/htr/test_words.jsonl
+  vocabulary: data/splits/htr/vocabulary.json
+  image_root: .
+  num_workers: 4
+  line_batch_size: 4
+  word_batch_size: 16
+  width_bucket_size: 256
+  line_batches_per_step: 3
+  word_batches_per_step: 1
+
+htr:
+  epochs: 40
+
+optimizer:
+  name: adamw
+  learning_rate: 0.0003
+  betas: [0.9, 0.98]
+  weight_decay: 0.01
+  gradient_clip_norm: 1.0
+
+scheduler:
+  warmup_steps: 2000
+  minimum_learning_rate_ratio: 0.1
+
+loss:
+  raw_weight: 1.0
+  base_weight: 0.5
+  shape_weight: 0.25
+  tone_weight: 0.25
+
+logging:
+  log_every_steps: 20
+  decode_every_steps: 500
+  tensorboard: true
+  wandb: true
+  wandb_mode: offline
+  wandb_project: vietparadiff-htr
+
+checkpoint:
+  output_dir: outputs/htr
+  save_last: true
+  save_best: true
