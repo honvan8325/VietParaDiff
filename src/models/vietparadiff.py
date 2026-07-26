@@ -326,7 +326,6 @@ class TextGuidedInterLineHarmonizer(nn.Module):
         self.context_dim = config.context_dim
         self.max_lines = config.max_lines
         self.dim = config.harmonizer_dim
-        self.heads = config.harmonizer_heads
         self.text_projection = nn.Linear(
             config.context_dim,
             self.dim,
@@ -372,7 +371,6 @@ class TextGuidedInterLineHarmonizer(nn.Module):
         self.output_projection = nn.Linear(self.dim, channels)
         nn.init.zeros_(self.output_projection.weight)
         nn.init.zeros_(self.output_projection.bias)
-        self.vertical_prior_raw = nn.Parameter(torch.tensor(-2.25))
 
     def _build_line_queries(
         self,
@@ -447,74 +445,6 @@ class TextGuidedInterLineHarmonizer(nn.Module):
         )
         return queries, line_valid
 
-    def _vertical_prior(
-        self,
-        line_valid: Tensor,
-        height: int,
-        width: int,
-        *,
-        dtype: torch.dtype,
-    ) -> Tensor:
-        if height <= 0 or width <= 0:
-            raise ValueError("Spatial height và width phải dương.")
-        batch = line_valid.shape[0]
-        line_counts = line_valid.sum(dim=1).clamp_min(1)
-        line_indices = torch.arange(
-            self.max_lines,
-            device=line_valid.device,
-            dtype=torch.float32,
-        )
-        centers = (
-            line_indices[None] + 0.5
-        ) / line_counts[:, None].to(torch.float32)
-        rows = (
-            torch.arange(
-                height,
-                device=line_valid.device,
-                dtype=torch.float32,
-            )
-            + 0.5
-        ) / height
-        spatial_y = (
-            rows[:, None]
-            .expand(height, width)
-            .reshape(-1)
-        )
-        strength = F.softplus(self.vertical_prior_raw.float())
-        bias = -strength * (
-            centers[:, :, None] - spatial_y[None, None, :]
-        ).square()
-        bias = bias.masked_fill(
-            ~line_valid[:, :, None],
-            -1e4,
-        )
-        expected = (batch, self.max_lines, height * width)
-        if bias.shape != expected:
-            raise RuntimeError(
-                f"Vertical prior phải có shape {expected}, "
-                f"nhận {tuple(bias.shape)}."
-            )
-        return bias.to(dtype)
-
-    def _attention_mask(self, bias: Tensor) -> Tensor:
-        if bias.ndim != 3:
-            raise ValueError("Attention bias phải có shape [B,Q,K].")
-        batch, query_length, key_length = bias.shape
-        return (
-            bias[:, None]
-            .expand(
-                batch,
-                self.heads,
-                query_length,
-                key_length,
-            )
-            .reshape(
-                batch * self.heads,
-                query_length,
-                key_length,
-            )
-        )
-
     def forward(
         self,
         features: Tensor,
@@ -562,18 +492,11 @@ class TextGuidedInterLineHarmonizer(nn.Module):
             .transpose(1, 2)
         )
         spatial = self.spatial_projection(spatial)
-        prior = self._vertical_prior(
-            selected_valid,
-            height,
-            width,
-            dtype=spatial.dtype,
-        )
         normalized_spatial = self.spatial_key_norm(spatial)
         attended_lines, _ = self.line_to_spatial(
             self.line_query_norm(selected_queries),
             normalized_spatial,
             normalized_spatial,
-            attn_mask=self._attention_mask(prior),
             need_weights=False,
         )
         line_tokens = selected_queries + attended_lines
@@ -589,16 +512,12 @@ class TextGuidedInterLineHarmonizer(nn.Module):
             ~selected_valid[:, :, None],
             0.0,
         )
-        reverse_prior = prior.transpose(1, 2)
-        reverse_prior = reverse_prior.masked_fill(
-            ~selected_valid[:, None, :],
-            -1e4,
-        )
+        normalized_lines = self.line_key_norm(line_tokens)
         spatial_delta, _ = self.spatial_to_line(
             self.spatial_query_norm(spatial),
-            self.line_key_norm(line_tokens),
-            self.line_key_norm(line_tokens),
-            attn_mask=self._attention_mask(reverse_prior),
+            normalized_lines,
+            normalized_lines,
+            key_padding_mask=~selected_valid,
             need_weights=False,
         )
         spatial_delta = self.output_projection(spatial_delta)
@@ -793,11 +712,9 @@ class ParagraphUNet(nn.Module):
 class VietParaDiff(nn.Module):
     """Generator inference graph; không chứa AutoKL decoder, sampler hoặc HTR.
 
-    Reference style phải được tạo trước bằng :meth:`encode_reference`. Caller
-    dùng ``style.layout_scales`` để chạy ``ParagraphFormatter``, rồi truyền
-    chính ``StyleCondition`` đó cùng grapheme IDs vào
-    :meth:`forward`. Contract hai bước này tránh encode reference hai lần và
-    đảm bảo formatter thực sự được reference-calibrated.
+    Reference style được tạo bằng :meth:`encode_reference` rồi truyền cùng
+    grapheme IDs vào :meth:`forward`. Base model chưa học layout calibration;
+    ``style.layout_scales`` cố định ở giá trị trung tính.
     """
 
     def __init__(self, config: VietParaDiffConfig) -> None:
@@ -812,7 +729,7 @@ class VietParaDiff(nn.Module):
         reference_images: Tensor,
         reference_valid_mask: Tensor,
     ) -> StyleCondition:
-        """Encode reference một lần trước discrete paragraph formatting."""
+        """Encode continuous reference style once for generator conditioning."""
         return self.style_encoder(reference_images, reference_valid_mask)
 
     def forward(self, batch: VietParaDiffInput) -> VietParaDiffOutput:

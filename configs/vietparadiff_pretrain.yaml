@@ -1,0 +1,49 @@
+seed: 42
+device: auto
+precision: auto
+
+data:
+  train_targets: data/splits/vietparadiff/pretrain_targets.jsonl
+  train_references: data/splits/vietparadiff/pretrain_references.jsonl
+  image_root: .
+  num_workers: 4
+  batch_size: 1
+  gradient_accumulation_steps: 8
+
+autokl:
+  checkpoint: outputs/autokl/best.pt
+  latent_statistics: outputs/autokl/latent_statistics.json
+
+style:
+  use_pretrained_backbone: true
+  convnext_checkpoint: null
+
+diffusion:
+  epochs: 100
+  num_train_timesteps: 1000
+  noise_schedule: cosine
+
+optimizer:
+  name: adamw
+  learning_rate: 0.0001
+  betas: [0.9, 0.99]
+  weight_decay: 0.01
+  gradient_clip_norm: 1.0
+
+scheduler:
+  warmup_steps: 5000
+  minimum_learning_rate_ratio: 0.1
+
+logging:
+  log_every_steps: 20
+  tensorboard: true
+  wandb: true
+  wandb_mode: offline
+  wandb_project: vietparadiff-pretrain
+  wandb_entity: null
+  run_name: null
+
+checkpoint:
+  output_dir: outputs/vietparadiff/pretrain
+  save_last: true
+  save_best: true

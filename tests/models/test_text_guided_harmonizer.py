@@ -70,6 +70,21 @@ def test_multi_line_harmonizer_has_text_attention_gradients() -> None:
     assert harmonizer.output_projection.weight.grad is not None
 
 
+def test_harmonizer_has_no_vertical_spatial_prior() -> None:
+    harmonizer = TextGuidedInterLineHarmonizer(
+        768,
+        ParagraphUNetConfig(),
+    )
+
+    assert not hasattr(harmonizer, "vertical_prior_raw")
+    assert "_vertical_prior" not in dir(harmonizer)
+    assert "_attention_mask" not in dir(harmonizer)
+    assert all(
+        "vertical_prior" not in name
+        for name, _ in harmonizer.named_parameters()
+    )
+
+
 def test_shape_and_tone_cannot_leak_into_deep_harmonizer() -> None:
     torch.manual_seed(17)
     config = ParagraphUNetConfig(dropout=0.0)

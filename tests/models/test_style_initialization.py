@@ -1,4 +1,4 @@
-"""Initialization and two-stage style/layout contract tests."""
+"""Initialization and base continuous-style contract tests."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def test_fusion_gate_starts_near_raw_only() -> None:
     )
 
 
-def test_layout_head_starts_at_neutral_scales() -> None:
+def test_base_style_has_fixed_neutral_layout_without_dead_head() -> None:
     model = DualFrequencyStyleEncoder(
         StyleEncoderConfig(use_pretrained_backbone=False)
     ).eval()
@@ -40,8 +40,7 @@ def test_layout_head_starts_at_neutral_scales() -> None:
         style = model(reference, torch.ones_like(reference, dtype=torch.bool))
 
     assert torch.equal(style.layout_scales, torch.ones(1, 3))
-    assert torch.count_nonzero(model.layout_head[-1].weight) == 0
-    assert torch.count_nonzero(model.layout_head[-1].bias) == 0
+    assert not hasattr(model, "layout_head")
 
 
 def test_top_level_input_requires_precomputed_style_condition() -> None:

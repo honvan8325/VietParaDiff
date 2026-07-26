@@ -98,13 +98,6 @@ class DualFrequencyStyleEncoder(nn.Module):
             nn.SiLU(),
             nn.Linear(config.feature_dim, config.feature_dim),
         )
-        self.layout_head = nn.Sequential(
-            nn.Linear(config.feature_dim, 256),
-            nn.SiLU(),
-            nn.Linear(256, 3),
-        )
-        nn.init.zeros_(self.layout_head[-1].weight)
-        nn.init.zeros_(self.layout_head[-1].bias)
         kernel = torch.tensor(
             [[0.0, 1.0, 0.0], [1.0, -4.0, 1.0], [0.0, 1.0, 0.0]]
         ).reshape(1, 1, 3, 3)
@@ -197,14 +190,11 @@ class DualFrequencyStyleEncoder(nn.Module):
                 dim=1,
             ).to(features.dtype)
         )
-        layout = self.layout_head(global_style)
-        layout_scales = torch.stack(
-            (
-                1.0 + 0.15 * torch.tanh(layout[:, 0]),
-                1.0 + 0.20 * torch.tanh(layout[:, 1]),
-                1.0 + 0.10 * torch.tanh(layout[:, 2]),
-            ),
-            dim=1,
+        layout_scales = torch.ones(
+            global_style.shape[0],
+            3,
+            dtype=global_style.dtype,
+            device=global_style.device,
         )
         return StyleCondition(local, global_style, layout_scales, valid)
 

@@ -17,3 +17,4 @@ wheels/
 *repomix*
 *.zip
 .DS_Store
+*.tar

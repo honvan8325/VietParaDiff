@@ -28,6 +28,17 @@ uv sync
 All commands below assume the current working directory is the repository
 root. Dataset paths are intentionally repository-relative.
 
+## Processed data
+
+A ready-to-use copy of the processed datasets is available here:
+
+**[Download VietParaDiff processed data](https://drive.google.com/file/d/1uoHTAEH5JmWVdcyB4B0AMkGtyDdAwdOh/view?usp=sharing)**
+
+Use this download to skip rebuilding the normalized images and manifests from
+the original dataset layouts. Extract the contents into the repository's
+`data/` directory while preserving the included directory structure. The
+original dataset licenses and usage terms still apply.
+
 ## Repository layout
 
 ```text

@@ -1,0 +1,23 @@
+seed: 42
+device: auto
+precision: auto
+
+model:
+  checkpoint: outputs/vietparadiff/pretrain/best.pt
+  contract: outputs/vietparadiff/pretrain/inference_contract.json
+  model_config: outputs/vietparadiff/pretrain/model_config.json
+  vocabulary: outputs/vietparadiff/pretrain/grapheme_vocabulary.json
+
+autokl:
+  checkpoint: outputs/autokl/best.pt
+  latent_statistics: outputs/autokl/latent_statistics.json
+
+diffusion:
+  num_inference_steps: 50
+
+input:
+  reference_height: 256
+  maximum_reference_width: 1536
+
+output:
+  directory: outputs/generated

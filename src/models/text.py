@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import unicodedata
 from collections.abc import Mapping
@@ -315,6 +316,33 @@ class GraphemeVocabulary:
         case_to_id: dict[str, int],
         class_to_id: dict[str, int],
     ) -> None:
+        mappings = {
+            "base_to_id": base_to_id,
+            "shape_to_id": shape_to_id,
+            "tone_to_id": tone_to_id,
+            "case_to_id": case_to_id,
+            "class_to_id": class_to_id,
+        }
+        for name, vocabulary in mappings.items():
+            if not isinstance(vocabulary, dict) or not vocabulary:
+                raise TypeError(f"{name} phải là dict không rỗng.")
+            if not all(
+                isinstance(token, str)
+                and token
+                and isinstance(index, int)
+                and not isinstance(index, bool)
+                for token, index in vocabulary.items()
+            ):
+                raise TypeError(
+                    f"{name} phải map string không rỗng sang integer ID."
+                )
+            ids = list(vocabulary.values())
+            if len(set(ids)) != len(ids):
+                raise ValueError(f"{name} chứa ID trùng.")
+            if sorted(ids) != list(range(len(ids))):
+                raise ValueError(
+                    f"{name} IDs phải liên tục từ 0."
+                )
         self.base_to_id = dict(base_to_id)
         self.shape_to_id = dict(shape_to_id)
         self.tone_to_id = dict(tone_to_id)
@@ -329,6 +357,74 @@ class GraphemeVocabulary:
         ):
             if vocab.get("<pad>") != 0 or vocab.get("<unk>") != 1:
                 raise ValueError(f"{name} vocabulary phải có <pad>=0 và <unk>=1.")
+
+    def to_dict(self) -> dict[str, dict[str, int]]:
+        return {
+            "base_to_id": dict(self.base_to_id),
+            "shape_to_id": dict(self.shape_to_id),
+            "tone_to_id": dict(self.tone_to_id),
+            "case_to_id": dict(self.case_to_id),
+            "class_to_id": dict(self.class_to_id),
+        }
+
+    @classmethod
+    def from_dict(
+        cls,
+        payload: object,
+    ) -> GraphemeVocabulary:
+        expected = {
+            "base_to_id",
+            "shape_to_id",
+            "tone_to_id",
+            "case_to_id",
+            "class_to_id",
+        }
+        if not isinstance(payload, Mapping) or set(payload) != expected:
+            actual = (
+                sorted(payload)
+                if isinstance(payload, Mapping)
+                else type(payload).__name__
+            )
+            raise ValueError(
+                f"Grapheme vocabulary keys phải bằng {sorted(expected)}, "
+                f"nhận {actual}."
+            )
+        mappings: dict[str, dict[str, int]] = {}
+        for name in sorted(expected):
+            value = payload[name]
+            if not isinstance(value, Mapping):
+                raise TypeError(f"{name} phải là mapping.")
+            mappings[name] = dict(value)  # type: ignore[arg-type]
+        return cls(**mappings)
+
+    def save(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(
+            json.dumps(
+                self.to_dict(),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+
+    @classmethod
+    def load(cls, path: Path) -> GraphemeVocabulary:
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"Không tìm thấy grapheme vocabulary: {path}"
+            )
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"Grapheme vocabulary JSON không hợp lệ: {path}"
+            ) from error
+        return cls.from_dict(payload)
 
     @classmethod
     def default_vietnamese(cls) -> GraphemeVocabulary:
