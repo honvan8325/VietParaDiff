@@ -170,7 +170,8 @@ def _config(tmp_path: Path) -> VietParaDiffTrainingConfig:
         ),
         style=StyleInitializationConfig(
             use_pretrained_backbone=True,
-            convnext_checkpoint=None,
+            convnext_checkpoint=tmp_path / "convnext_tiny.pt",
+            backbone_contract=tmp_path / "vision_backbones.json",
         ),
         diffusion=DiffusionStageConfig(
             epochs=2,
@@ -279,6 +280,8 @@ def _trainer(
             "train_references": "c" * 64,
             "autokl_checkpoint": "a" * 64,
             "latent_statistics": "d" * 64,
+            "convnext_checkpoint": "e" * 64,
+            "visual_backbone_contract": "f" * 64,
         },
         {"tiny": True},
         (
@@ -506,6 +509,74 @@ def test_checkpoint_resume_is_strict_and_best_is_model_only(
     ):
         incompatible.resume(tmp_path / "checkpoints" / "last.pt")
     assert torch.equal(before, incompatible_model.output.weight)
+
+
+def test_forced_checkpoint_policy_keeps_final_epoch_model(
+    tmp_path: Path,
+) -> None:
+    trainer, model, _ = _trainer(tmp_path)
+    trainer.save_epoch_checkpoints(
+        next_epoch=1,
+        train_score=0.1,
+        force_model_checkpoint=True,
+    )
+    first = torch.load(
+        tmp_path / "checkpoints" / "best.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
+    with torch.no_grad():
+        model.output.weight.add_(1.0)
+    trainer.save_epoch_checkpoints(
+        next_epoch=2,
+        train_score=10.0,
+        force_model_checkpoint=True,
+    )
+    final = torch.load(
+        tmp_path / "checkpoints" / "best.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
+    assert not torch.equal(
+        first["model"]["output.weight"],
+        final["model"]["output.weight"],
+    )
+    assert torch.equal(
+        final["model"]["output.weight"],
+        model.output.weight,
+    )
+    assert trainer.best_score == 10.0
+
+
+def test_legacy_pretrain_checkpoint_without_stage_migrates(
+    tmp_path: Path,
+) -> None:
+    trainer, _, _ = _trainer(tmp_path)
+    trainer.global_step = 3
+    trainer.save_epoch_checkpoints(next_epoch=1, train_score=0.4)
+    checkpoint = tmp_path / "checkpoints" / "last.pt"
+    payload = torch.load(
+        checkpoint,
+        map_location="cpu",
+        weights_only=False,
+    )
+    payload.pop("stage")
+    payload.pop("lineage")
+    legacy_config = payload["config"]
+    legacy_config.pop("stage")
+    legacy_config.pop("initialization")
+    legacy_config.pop("guidance")
+    legacy_data = legacy_config["data"]
+    legacy_data.pop("real_targets")
+    legacy_data.pop("synthetic_targets")
+    legacy_data.pop("real_batches_per_cycle")
+    legacy_data.pop("synthetic_batches_per_cycle")
+    torch.save(payload, checkpoint)
+
+    resumed, _, _ = _trainer(tmp_path)
+    state = resumed.resume(checkpoint)
+    assert state.epoch == 1
+    assert state.global_step == 3
 
 
 def test_resume_rejects_changed_artifact_before_model_load(

@@ -45,10 +45,19 @@ original dataset licenses and usage terms still apply.
 .
 ├── configs/
 │   ├── autokl/train.yaml
-│   ├── htr/train.yaml
+│   ├── htr/
+│   │   ├── train.yaml
+│   │   └── eval.yaml
+│   ├── baselines/              # Three seeds for each external baseline
+│   ├── writer_metric/train.yaml
+│   ├── experiments/paper.yaml
 │   └── vietparadiff/
 │       ├── pretrain.yaml
-│       └── generate.yaml
+│       ├── finetune.yaml
+│       ├── htr_guided.yaml
+│       ├── generate.yaml
+│       ├── evaluate.yaml
+│       └── metrics.yaml
 ├── data/                       # Raw, processed, and split manifests
 ├── scripts/
 │   ├── build_dataset.py
@@ -57,7 +66,14 @@ original dataset licenses and usage terms still apply.
 │   ├── train_autokl.py
 │   ├── train_htr.py
 │   ├── train_generator.py
-│   └── generate.py
+│   ├── generate.py
+│   ├── evaluate.py
+│   ├── score_evaluation.py
+│   ├── train_writer_metric.py
+│   ├── audit_dataset.py
+│   ├── run_baseline.py
+│   ├── run_experiments.py
+│   └── aggregate_results.py
 └── src/
     └── vietparadiff/
         ├── artifacts.py        # Checkpoint-bound artifact contracts
@@ -66,7 +82,9 @@ original dataset licenses and usage terms still apply.
         ├── data/               # Builders and training data pipeline
         ├── models/             # AutoKL, HTR, style, grapheme, generator
         ├── training/           # Stage-specific trainers
-        └── inference/          # Sampling and generation pipeline
+        ├── inference/          # Sampling and generation pipeline
+        ├── evaluation/         # Fixed-pair generation and scoring
+        └── baselines/          # Strict external-checkout adapters
 ```
 
 ## Expected raw-data layout
@@ -368,9 +386,14 @@ Canonical slots describe the layout requested for generated images and are
 reserved for the later generated-image HTR auxiliary path. They are not
 treated as regions of real target images and are never passed to the
 diffusion U-Net. Inter-line alignment inside the U-Net is learned from
-physical line IDs using text-guided spatial cross-attention with a weak
-monotonic vertical prior; it does not use line boxes, line detection, or
-pseudo masks.
+physical line IDs using text-guided spatial cross-attention without a
+vertical spatial prior; it does not use line boxes, line detection, or pseudo
+masks.
+
+The formatter is a neutral deterministic layout component. It preserves hard
+newlines, wraps by fixed priors, and chooses a supported height bucket. The
+current implementation does not claim learned or reference-calibrated
+character width, word gap, or line gap.
 
 ## Dataset-specific behavior
 
@@ -402,6 +425,18 @@ empty, undecodable, or invalid are logged and skipped.
 
 ## Training and generation
 
+Prepare both ImageNet backbones explicitly before training. This is the only
+command allowed to use torchvision's download mechanism:
+
+```bash
+uv run python scripts/prepare_visual_backbones.py
+```
+
+It writes ConvNeXt-Tiny and ResNet-18 state dictionaries under
+`checkpoints/vision/` plus `manifest.json` containing their SHA-256 hashes.
+Generator pretraining and writer-verifier training fail if a local checkpoint
+is missing or does not match that contract; they never download implicitly.
+
 Every stage has a distinct configuration path:
 
 ```bash
@@ -411,9 +446,44 @@ uv run python scripts/train_autokl.py \
 uv run python scripts/train_htr.py \
   --config configs/htr/train.yaml
 
+uv run python scripts/train_htr.py \
+  --config configs/htr/eval.yaml
+
 uv run python scripts/train_generator.py \
   --config configs/vietparadiff/pretrain.yaml
+
+uv run python scripts/train_generator.py \
+  --config configs/vietparadiff/finetune.yaml
+
+uv run python scripts/train_generator.py \
+  --config configs/vietparadiff/htr_guided.yaml
 ```
+
+Fine-tune stages strict-load only generator model weights from the previous
+stage, then create a new optimizer and scheduler. Vietnamese fine-tuning
+exhausts real batches once per epoch and inserts one synthetic batch after
+every three real batches. HTR guidance uses canonical slots only to crop
+generated images for the frozen line-level teacher; slots never enter the
+diffusion U-Net. The frozen teacher is bound to `best.pt`,
+`model_config.json`, and the exact HTR vocabulary through
+`outputs/htr/inference_contract.json`.
+
+The first HTR run is the guidance teacher. The second is the paper-scoring
+evaluator, trained separately with a different seed, augmentation policy,
+vocabulary artifact path, output directory, and W&B project. Scoring rejects
+the artifacts if their checkpoint SHA-256 values are equal.
+
+Each HTR run also writes `training_contract.json`, binding its selected
+checkpoint to the canonical resolved-config SHA-256, seed, augmentation,
+training line/word manifest hashes, and the
+`minimum_train_loss` selection policy. Paper preflight validates both
+contracts and requires the guidance/evaluation seeds and augmentations to
+differ. Test manifests are never part of checkpoint selection.
+
+For the `htr_guided` generator stage, `best.pt` deliberately means the model
+from the final completed epoch. It is overwritten after every guided epoch
+instead of comparing non-stationary objectives while the HTR weight is
+warming up. `last.pt` remains the strict resume artifact.
 
 Compute AutoKL latent normalization statistics before generator training:
 
@@ -429,6 +499,143 @@ uv run python scripts/generate.py \
   --text-file target.txt \
   --reference reference.png
 ```
+
+Generate all fixed held-out pairs with three stable seeds per pair:
+
+```bash
+uv run python scripts/evaluate.py \
+  --config configs/vietparadiff/evaluate.yaml
+```
+
+Use `--resume` only with the same manifest, checkpoints, vocabulary, latent
+statistics, inference settings, and existing PNG hashes.
+
+## Paper scoring
+
+Train the independent grayscale ResNet-18 writer verifier on real training
+lines and paragraphs:
+
+```bash
+uv run python scripts/train_writer_metric.py \
+  --config configs/writer_metric/train.yaml
+```
+
+The verifier uses 256-dimensional L2-normalized embeddings and ArcFace
+(`scale=30`, `margin=0.5`). Its train/validation writers are deterministically
+split 90/10 and disjoint. This is an explicitly allowed internal validation
+protocol for the auxiliary evaluator only; held-out paper test writers remain
+untouched. The selection protocol is serialized in the artifact contract.
+`best.pt` is selected by validation EER and is bound to the exact model
+config, writer mapping, input manifests, and local ResNet-18 artifact.
+
+Score already generated fixed-pair PNGs without running diffusion again:
+
+```bash
+uv run python scripts/score_evaluation.py \
+  --config configs/vietparadiff/metrics.yaml
+```
+
+The scorer writes per-sample `metrics.jsonl` before aggregating
+`metrics_summary.json`. It reports HTR content errors, independent writer
+verification, writer-feature style-distribution MMD, multi-seed diversity,
+foreground density, blank outputs,
+ink outside canonical slots, and inter-line bleed. Every record is bound to
+the PNG and all model/vocabulary/manifest hashes.
+
+Style embeddings, retrieval, verification, and style-distribution MMD
+intentionally exclude completely blank generated images. Their coverage is
+reported as `style_metric_coverage`; content errors and `blank_output_rate`
+still include every sample. No zero embedding or replacement image is used.
+This MMD is not called standard Inception KID because it is computed in the
+independent writer-feature space.
+
+The reference retrieval gallery always contains every unique reference in
+`test_pairs.jsonl`, and the real MMD distribution always contains every
+unique target paragraph. These two real sets are encoded before inspecting
+generated outputs. Only the generated side is filtered for blank images, so a
+difficult or blank generation cannot remove its writer or target from the
+evaluation population.
+
+## Ablations, baselines, and multi-seed experiments
+
+Model behavior flags disable shape, tone, local style, high-frequency style,
+or harmonization without deleting modules or changing any state-dict key.
+`configs/experiments/paper.yaml` defines the cumulative A0, A1, A2, A3, A4,
+and Full variants for seeds 42, 43, and 44:
+
+```bash
+uv run python scripts/run_experiments.py --dry-run --allow-dirty
+uv run python scripts/run_experiments.py --resume
+uv run python scripts/aggregate_results.py
+```
+
+Paper runs require a clean Git worktree by default. `--allow-dirty` records a
+SHA-256 of the binary patch and untracked files in every run manifest.
+Aggregation produces JSON, CSV, and Markdown with the mean, sample standard
+deviation, and 95% Student-t confidence interval across the three training
+seeds. MMD subset variation remains separate from training-seed variation.
+
+Before the first subprocess, a non-dry paper run performs a complete
+preflight: clean full-data audit, local vision backbones, AutoKL and latent
+statistics, distinct guidance/evaluation HTRs, writer verifier, every
+resolved internal config, and every external checkout/command/checkpoint.
+Resume compares the current resolved-config SHA-256 and canonical command
+against the completed-stage manifest before reusing an artifact.
+
+External One-DM and Paragraph LDM code is not vendored. Create a baseline YAML
+using the strict schema accepted by `scripts/run_baseline.py`, point it at a
+separate checkout, and run:
+
+```bash
+uv run python scripts/run_baseline.py --config /path/to/baseline.yaml
+```
+
+The adapters require the exact pinned commits
+`dde2205a70a2c70d1786503d198a795358c80ee4` for One-DM and
+`8a53e91b99c868614f7e615f41bc49c3f73c75b9` for Paragraph LDM, verify the
+external checkpoint hash, and enforce a common JSONL request/output schema.
+One-DM outputs are explicitly reported as a deterministically stitched
+word-level baseline. Paragraph LDM output is aspect-preserved and white-padded
+to the target bucket.
+
+For the paper DAG, provide seed-specific external configs at
+`configs/baselines/one_dm/seed_{42,43,44}.yaml` and
+`configs/baselines/paragraph_ldm/seed_{42,43,44}.yaml`. Each must reference
+the checkpoint retrained for that training seed. The common runner then runs
+generation and scoring for all six external artifacts, records the same Git
+and artifact provenance, and includes `one_dm` and `paragraph_ldm` in the
+three-seed aggregate. Missing external configs, checkout commits, environment
+commands, or checkpoint hashes fail explicitly.
+
+Six template configs are included at those exact paths. Their all-zero
+checkpoint hashes are deliberate invalid placeholders: replace each path and
+SHA-256 with the corresponding trained external artifact before starting the
+paper DAG. Preflight rejects the templates instead of beginning the internal
+runs and failing much later.
+
+Dependency resolution is pinned by the tracked `uv.lock`; this work does not
+modify or regenerate it.
+
+No paper metric, baseline superiority, or full reproducibility claim is valid
+until the frozen models are trained and all three-seed runs complete.
+
+## Full-data audit
+
+Audit every split record and referenced image before paper training:
+
+```bash
+uv run python scripts/audit_dataset.py \
+  --output outputs/data_audit.json
+```
+
+The audit checks schema, IDs, paths, dimensions, image decode, duplicate
+content, writer/image leakage, formatter acceptance, HTR CTC feasibility,
+target/reference eligibility, and excluded source-line rules. It exits
+nonzero if any invariant fails and retains the concrete error records in the
+JSON report. Audit schema v2 also stores every manifest SHA-256, an image
+inventory SHA-256, and a combined dataset snapshot SHA-256. Paper preflight
+recomputes this snapshot without decoding images and rejects a stale report
+when any split manifest or referenced image has changed.
 
 ## Validation
 
@@ -448,4 +655,12 @@ uv run python scripts/train_autokl.py --help
 uv run python scripts/train_htr.py --help
 uv run python scripts/train_generator.py --help
 uv run python scripts/generate.py --help
+uv run python scripts/evaluate.py --help
+uv run python scripts/prepare_visual_backbones.py --help
+uv run python scripts/audit_dataset.py --help
+uv run python scripts/train_writer_metric.py --help
+uv run python scripts/score_evaluation.py --help
+uv run python scripts/run_baseline.py --help
+uv run python scripts/run_experiments.py --help
+uv run python scripts/aggregate_results.py --help
 ```

@@ -1,0 +1,60 @@
+seed: 42
+device: auto
+precision: auto
+stage: finetune
+
+initialization:
+  checkpoint: outputs/vietparadiff/pretrain/best.pt
+  contract: outputs/vietparadiff/pretrain/inference_contract.json
+  model_config: outputs/vietparadiff/pretrain/model_config.json
+  vocabulary: outputs/vietparadiff/pretrain/grapheme_vocabulary.json
+
+guidance: null
+
+data:
+  real_targets: data/splits/vietparadiff/finetune_targets_real.jsonl
+  synthetic_targets: data/splits/vietparadiff/finetune_targets_synthetic.jsonl
+  train_references: data/splits/vietparadiff/finetune_references.jsonl
+  image_root: .
+  num_workers: 4
+  batch_size: 1
+  gradient_accumulation_steps: 8
+  real_batches_per_cycle: 3
+  synthetic_batches_per_cycle: 1
+  use_synthetic_data: true
+
+autokl:
+  checkpoint: outputs/autokl/best.pt
+  latent_statistics: outputs/autokl/latent_statistics.json
+
+style: null
+
+diffusion:
+  epochs: 50
+  num_train_timesteps: 1000
+  noise_schedule: cosine
+
+optimizer:
+  name: adamw
+  learning_rate: 0.00005
+  betas: [0.9, 0.99]
+  weight_decay: 0.01
+  gradient_clip_norm: 1.0
+
+scheduler:
+  warmup_steps: 2000
+  minimum_learning_rate_ratio: 0.1
+
+logging:
+  log_every_steps: 20
+  tensorboard: true
+  wandb: true
+  wandb_mode: offline
+  wandb_project: vietparadiff-finetune
+  wandb_entity: null
+  run_name: null
+
+checkpoint:
+  output_dir: outputs/vietparadiff/finetune
+  save_last: true
+  save_best: true

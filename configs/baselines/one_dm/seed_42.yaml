@@ -1,0 +1,17 @@
+name: one_dm
+checkout: external/One-DM
+expected_commit: dde2205a70a2c70d1786503d198a795358c80ee4
+checkpoint: external/One-DM/outputs/vietnamese_seed_42/best.pt
+checkpoint_sha256: 0000000000000000000000000000000000000000000000000000000000000000
+command:
+- .venv/bin/python
+- vietparadiff_adapter.py
+- --requests={requests}
+- --output-dir={output_dir}
+- --checkpoint={checkpoint}
+test_pairs: data/splits/vietparadiff/test_pairs.jsonl
+image_root: .
+generator_model_config: outputs/experiments/full/seed_42/htr_guided/model_config.json
+output_dir: outputs/experiments/one_dm/seed_42/evaluation
+base_seed: 42
+samples_per_pair: 3

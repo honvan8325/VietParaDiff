@@ -10,7 +10,7 @@ from pathlib import Path
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
-from torchvision.models import ConvNeXt_Tiny_Weights, convnext_tiny
+from torchvision.models import convnext_tiny
 
 from .config import StyleEncoderConfig
 
@@ -29,32 +29,32 @@ class DualFrequencyStyleEncoder(nn.Module):
     def __init__(self, config: StyleEncoderConfig) -> None:
         super().__init__()
         self.config = config
-        if config.use_pretrained_backbone and config.convnext_checkpoint is None:
-            source = convnext_tiny(
-                weights=ConvNeXt_Tiny_Weights.IMAGENET1K_V1
-            )
-        else:
-            source = convnext_tiny(weights=None)
-            if config.use_pretrained_backbone:
-                path = config.convnext_checkpoint
-                if path is None or not path.is_file():
-                    raise FileNotFoundError(
-                        f"Không tìm thấy ConvNeXt checkpoint: {path}"
-                    )
-                state: object = torch.load(
-                    path, map_location="cpu", weights_only=True
+        source = convnext_tiny(weights=None)
+        if config.use_pretrained_backbone:
+            path = config.convnext_checkpoint
+            if path is None:
+                raise ValueError(
+                    "ConvNeXt pretrained yêu cầu checkpoint local; "
+                    "training/inference không tự download weights."
                 )
-                if isinstance(state, Mapping) and set(state) == {"model"}:
-                    state = state["model"]
-                if not isinstance(state, Mapping) or not all(
-                    isinstance(key, str) and isinstance(value, Tensor)
-                    for key, value in state.items()
-                ):
-                    raise ValueError(
-                        "ConvNeXt checkpoint phải là torchvision state_dict "
-                        "hoặc {'model': state_dict}."
-                    )
-                source.load_state_dict(dict(state), strict=True)
+            if not path.is_file():
+                raise FileNotFoundError(
+                    f"Không tìm thấy ConvNeXt checkpoint: {path}"
+                )
+            state: object = torch.load(
+                path, map_location="cpu", weights_only=True
+            )
+            if isinstance(state, Mapping) and set(state) == {"model"}:
+                state = state["model"]
+            if not isinstance(state, Mapping) or not all(
+                isinstance(key, str) and isinstance(value, Tensor)
+                for key, value in state.items()
+            ):
+                raise ValueError(
+                    "ConvNeXt checkpoint phải là torchvision state_dict "
+                    "hoặc {'model': state_dict}."
+                )
+            source.load_state_dict(dict(state), strict=True)
 
         raw_stem = copy.deepcopy(source.features[0])
         hf_stem = copy.deepcopy(source.features[0])
@@ -157,7 +157,12 @@ class DualFrequencyStyleEncoder(nn.Module):
         raw = self.raw_stem(images)
         high = self.hf_stem(high_frequency)
         gate = torch.sigmoid(self.fusion_gate(torch.cat((raw, high), dim=1)))
-        features = self.shared_trunk(raw + gate * high)
+        fused = (
+            raw + gate * high
+            if self.config.use_high_frequency_style
+            else raw
+        )
+        features = self.shared_trunk(fused)
         valid = (
             F.adaptive_max_pool2d(
                 reference_valid_mask.float(), features.shape[-2:]

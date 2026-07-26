@@ -1,5 +1,11 @@
 """Public dataset-building API."""
 
+from vietparadiff.data.audit import (
+    AuditIssue,
+    DatasetAuditor,
+    DatasetSnapshot,
+    compute_dataset_snapshot,
+)
 from vietparadiff.data.cvl import build_cvl_dataset
 from vietparadiff.data.iam import build_iam_dataset
 from vietparadiff.data.splits import SplitConfig, create_data_splits
@@ -39,4 +45,8 @@ __all__ = [
     "collate_autokl",
     "collate_htr",
     "VietParaDiffCollator",
+    "AuditIssue",
+    "DatasetAuditor",
+    "DatasetSnapshot",
+    "compute_dataset_snapshot",
 ]

@@ -1,0 +1,17 @@
+name: paragraph_ldm
+checkout: external/paragraph_handwriting_imitation_ldm
+expected_commit: 8a53e91b99c868614f7e615f41bc49c3f73c75b9
+checkpoint: external/paragraph_handwriting_imitation_ldm/outputs/vietnamese_seed_44/best.pt
+checkpoint_sha256: 0000000000000000000000000000000000000000000000000000000000000000
+command:
+- .venv/bin/python
+- vietparadiff_adapter.py
+- --requests={requests}
+- --output-dir={output_dir}
+- --checkpoint={checkpoint}
+test_pairs: data/splits/vietparadiff/test_pairs.jsonl
+image_root: .
+generator_model_config: outputs/experiments/full/seed_44/htr_guided/model_config.json
+output_dir: outputs/experiments/paragraph_ldm/seed_44/evaluation
+base_seed: 42
+samples_per_pair: 3

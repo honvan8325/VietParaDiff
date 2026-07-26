@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import random
@@ -125,6 +126,22 @@ class HTRLossConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class HTRAugmentationConfig:
+    ink_intensity_jitter: float
+    gaussian_noise_std: float
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.ink_intensity_jitter <= 0.25:
+            raise ValueError(
+                "augmentation.ink_intensity_jitter phải trong [0,0.25]."
+            )
+        if not 0.0 <= self.gaussian_noise_std <= 0.1:
+            raise ValueError(
+                "augmentation.gaussian_noise_std phải trong [0,0.1]."
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class HTRLoggingConfig:
     log_every_steps: int
     decode_every_steps: int
@@ -163,6 +180,7 @@ class HTRTrainingConfig:
     optimizer: HTROptimizerConfig
     scheduler: HTRSchedulerConfig
     loss: HTRLossConfig
+    augmentation: HTRAugmentationConfig
     logging: HTRLoggingConfig
     checkpoint: HTRCheckpointConfig
 
@@ -218,7 +236,7 @@ def _resume_config_signature(
     for name in ("seed", "precision"):
         if name not in config:
             raise ValueError(f"Resume config thiếu key '{name}'.")
-    for name in ("optimizer", "scheduler", "loss"):
+    for name in ("optimizer", "scheduler", "loss", "augmentation"):
         if not isinstance(config.get(name), Mapping):
             raise ValueError(
                 f"Resume config.{name} phải là mapping."
@@ -237,6 +255,7 @@ def _resume_config_signature(
         "optimizer": dict(config["optimizer"]),  # type: ignore[arg-type]
         "scheduler": dict(config["scheduler"]),  # type: ignore[arg-type]
         "loss": dict(config["loss"]),  # type: ignore[arg-type]
+        "augmentation": dict(config["augmentation"]),  # type: ignore[arg-type]
     }
 
 
@@ -285,6 +304,7 @@ def load_htr_training_config(path: Path) -> HTRTrainingConfig:
     root_keys = {
         "seed", "device", "precision", "data", "htr", "optimizer",
         "scheduler", "loss", "logging", "checkpoint",
+        "augmentation",
     }
     if set(raw) != root_keys:
         raise ValueError(f"HTR config root keys phải bằng {sorted(root_keys)}.")
@@ -303,6 +323,11 @@ def load_htr_training_config(path: Path) -> HTRTrainingConfig:
     )
     loss = _section(
         raw, "loss", {"raw_weight", "base_weight", "shape_weight", "tone_weight"}
+    )
+    augmentation = _section(
+        raw,
+        "augmentation",
+        {"ink_intensity_jitter", "gaussian_noise_std"},
     )
     logging = _section(raw, "logging", {
         "log_every_steps", "decode_every_steps", "tensorboard", "wandb",
@@ -355,6 +380,14 @@ def load_htr_training_config(path: Path) -> HTRTrainingConfig:
             base_weight=float(loss["base_weight"]),
             shape_weight=float(loss["shape_weight"]),
             tone_weight=float(loss["tone_weight"]),
+        ),
+        augmentation=HTRAugmentationConfig(
+            ink_intensity_jitter=float(
+                augmentation["ink_intensity_jitter"]
+            ),
+            gaussian_noise_std=float(
+                augmentation["gaussian_noise_std"]
+            ),
         ),
         logging=HTRLoggingConfig(
             log_every_steps=int(logging["log_every_steps"]),
@@ -927,6 +960,174 @@ def save_model_checkpoint(path: Path, model: nn.Module) -> None:
     temporary.replace(path)
 
 
+def _write_json_atomic(
+    path: Path,
+    payload: Mapping[str, object],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(
+            dict(payload),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def ensure_htr_static_artifacts(
+    output_dir: Path,
+    vocabulary: HTRVocabulary,
+    model_config: Mapping[str, object],
+) -> None:
+    vocabulary_path = output_dir / "vocabulary.json"
+    model_config_path = output_dir / "model_config.json"
+    if vocabulary_path.exists():
+        stored_vocabulary = HTRVocabulary.load(vocabulary_path)
+        if stored_vocabulary != vocabulary:
+            raise ValueError(
+                "HTR output vocabulary.json không khớp run."
+            )
+    else:
+        temporary = vocabulary_path.with_suffix(".json.tmp")
+        vocabulary.save(temporary)
+        temporary.replace(vocabulary_path)
+    if model_config_path.exists():
+        stored_config = json.loads(
+            model_config_path.read_text(encoding="utf-8")
+        )
+        if stored_config != dict(model_config):
+            raise ValueError(
+                "HTR output model_config.json không khớp run."
+            )
+    else:
+        _write_json_atomic(model_config_path, model_config)
+
+
+def save_htr_inference_contract(output_dir: Path) -> None:
+    checkpoint = output_dir / "best.pt"
+    model_config = output_dir / "model_config.json"
+    vocabulary = output_dir / "vocabulary.json"
+    contract = {
+        "schema_version": 1,
+        "htr_checkpoint_sha256": sha256_file(checkpoint),
+        "model_config_sha256": sha256_file(model_config),
+        "vocabulary_sha256": sha256_file(vocabulary),
+    }
+    _write_json_atomic(
+        output_dir / "inference_contract.json",
+        contract,
+    )
+
+
+def htr_resolved_config_sha256(config: HTRTrainingConfig) -> str:
+    payload = json.dumps(
+        config.resolved_dict(),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def save_htr_training_contract(
+    output_dir: Path,
+    config: HTRTrainingConfig,
+    manifest_sha256: Mapping[str, str],
+) -> None:
+    required = {"train_lines", "train_words"}
+    if not required.issubset(manifest_sha256):
+        raise ValueError(
+            "HTR training contract thiếu train manifest hashes."
+        )
+    for name in sorted(required):
+        digest = manifest_sha256[name]
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in digest
+            )
+        ):
+            raise ValueError(
+                f"HTR training contract {name} SHA-256 không hợp lệ."
+            )
+    contract = {
+        "schema_version": 1,
+        "resolved_config_sha256": htr_resolved_config_sha256(
+            config
+        ),
+        "seed": config.seed,
+        "augmentation": asdict(config.augmentation),
+        "train_lines_sha256": manifest_sha256["train_lines"],
+        "train_words_sha256": manifest_sha256["train_words"],
+        "htr_checkpoint_sha256": sha256_file(
+            output_dir / "best.pt"
+        ),
+        "checkpoint_selection": "minimum_train_loss",
+    }
+    _write_json_atomic(
+        output_dir / "training_contract.json",
+        contract,
+    )
+
+
+def validate_htr_training_contract(
+    config: HTRTrainingConfig,
+) -> dict[str, object]:
+    output_dir = config.checkpoint.output_dir
+    path = output_dir / "training_contract.json"
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Không tìm thấy HTR training contract: {path}"
+        )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    expected_keys = {
+        "schema_version",
+        "resolved_config_sha256",
+        "seed",
+        "augmentation",
+        "train_lines_sha256",
+        "train_words_sha256",
+        "htr_checkpoint_sha256",
+        "checkpoint_selection",
+    }
+    if (
+        not isinstance(payload, Mapping)
+        or set(payload) != expected_keys
+        or payload["schema_version"] != 1
+    ):
+        raise ValueError("HTR training contract sai schema.")
+    expected_values: dict[str, object] = {
+        "resolved_config_sha256": htr_resolved_config_sha256(
+            config
+        ),
+        "seed": config.seed,
+        "augmentation": asdict(config.augmentation),
+        "train_lines_sha256": sha256_file(
+            config.data.train_lines
+        ),
+        "train_words_sha256": sha256_file(
+            config.data.train_words
+        ),
+        "htr_checkpoint_sha256": sha256_file(
+            output_dir / "best.pt"
+        ),
+        "checkpoint_selection": "minimum_train_loss",
+    }
+    for name, expected in expected_values.items():
+        if payload[name] != expected:
+            raise ValueError(
+                f"HTR training contract mismatch tại {name}."
+            )
+    return dict(payload)
+
+
 class HTRTrainer:
     def __init__(
         self,
@@ -955,12 +1156,50 @@ class HTRTrainer:
         self.logger = logger
         self.global_step = 0
         self.best_score = math.inf
+        ensure_htr_static_artifacts(
+            self.config.checkpoint.output_dir,
+            self.vocabulary,
+            self.model_config,
+        )
 
-    def _forward(self, batch: Mapping[str, object]) -> tuple[HTROutput, HTRLosses]:
+    def _augment_images(self, images: Tensor) -> Tensor:
+        config = self.config.augmentation
+        if (
+            config.ink_intensity_jitter == 0.0
+            and config.gaussian_noise_std == 0.0
+        ):
+            return images
+        ink = ((1.0 - images) / 2.0).clamp(0.0, 1.0)
+        if config.ink_intensity_jitter > 0.0:
+            lower = 1.0 - config.ink_intensity_jitter
+            upper = 1.0 + config.ink_intensity_jitter
+            factor = torch.empty(
+                images.shape[0],
+                1,
+                1,
+                1,
+                device=images.device,
+                dtype=images.dtype,
+            ).uniform_(lower, upper)
+            ink = ink * factor
+        if config.gaussian_noise_std > 0.0:
+            ink = ink + torch.randn_like(ink) * (
+                config.gaussian_noise_std * ink.sqrt()
+            )
+        return (1.0 - 2.0 * ink.clamp(0.0, 1.0)).clamp(-1.0, 1.0)
+
+    def _forward(
+        self,
+        batch: Mapping[str, object],
+        *,
+        augment: bool = False,
+    ) -> tuple[HTROutput, HTRLosses]:
         images = batch.get("images")
         valid_widths = batch.get("valid_widths")
         if not isinstance(images, Tensor) or not isinstance(valid_widths, Tensor):
             raise TypeError("HTR batch thiếu images/valid_widths Tensor.")
+        if augment:
+            images = self._augment_images(images)
         with autocast_context(self.runtime):
             output = self.model(images, valid_widths)
             losses = compute_htr_losses(output, batch, self.config.loss)
@@ -1020,7 +1259,7 @@ class HTRTrainer:
             )
             for level, host_batch in micro_batches:
                 batch = _move_batch(host_batch, self.runtime.device)
-                output, losses = self._forward(batch)
+                output, losses = self._forward(batch, augment=True)
                 loss_weight = micro_batch_loss_weight(
                     level,
                     line_batch_count=len(lines),
@@ -1134,6 +1373,12 @@ class HTRTrainer:
         temporary.replace(output_dir / "last.pt")
         if improved:
             save_model_checkpoint(output_dir / "best.pt", self.model)
+            save_htr_training_contract(
+                output_dir,
+                self.config,
+                self.manifest_sha256,
+            )
+            save_htr_inference_contract(output_dir)
         return improved
 
     def resume(self, path: Path) -> ResumeState:

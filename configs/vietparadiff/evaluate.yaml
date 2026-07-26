@@ -1,0 +1,29 @@
+base_seed: 42
+device: auto
+precision: auto
+
+model:
+  checkpoint: outputs/vietparadiff/htr_guided/best.pt
+  contract: outputs/vietparadiff/htr_guided/inference_contract.json
+  model_config: outputs/vietparadiff/htr_guided/model_config.json
+  vocabulary: outputs/vietparadiff/htr_guided/grapheme_vocabulary.json
+
+autokl:
+  checkpoint: outputs/autokl/best.pt
+  latent_statistics: outputs/autokl/latent_statistics.json
+
+data:
+  test_pairs: data/splits/vietparadiff/test_pairs.jsonl
+  image_root: .
+  samples_per_pair: 3
+
+diffusion:
+  num_inference_steps: 50
+
+input:
+  reference_height: 256
+  maximum_reference_width: 1536
+
+output:
+  directory: outputs/vietparadiff/evaluation
+  contact_sheet_pairs: 8

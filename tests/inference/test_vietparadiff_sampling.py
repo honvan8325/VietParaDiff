@@ -496,6 +496,46 @@ def test_model_config_loads_strictly_without_inference_download(
         load_model_config(path)
 
 
+def test_model_config_legacy_flags_are_all_or_nothing(
+    tmp_path: Path,
+) -> None:
+    _, vocabulary, _ = _text_components()
+    stored = VietParaDiffConfig(
+        autokl=AutoKLConfig(),
+        text=TextEncoderConfig(
+            base_vocab_size=len(vocabulary.base_to_id),
+            shape_vocab_size=len(vocabulary.shape_to_id),
+            tone_vocab_size=len(vocabulary.tone_to_id),
+            case_vocab_size=len(vocabulary.case_to_id),
+            class_vocab_size=len(vocabulary.class_to_id),
+        ),
+        style=StyleEncoderConfig(use_pretrained_backbone=False),
+        unet=ParagraphUNetConfig(),
+    )
+    payload = asdict(stored)
+    payload["style"].pop("use_high_frequency_style")
+    for key in (
+        "use_shape_condition",
+        "use_tone_condition",
+        "use_local_style_tokens",
+        "use_harmonizer",
+    ):
+        payload["unet"].pop(key)
+    path = tmp_path / "legacy.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    loaded = load_model_config(path)
+    assert loaded.style.use_high_frequency_style
+    assert loaded.unet.use_shape_condition
+    assert loaded.unet.use_tone_condition
+    assert loaded.unet.use_local_style_tokens
+    assert loaded.unet.use_harmonizer
+
+    payload["unet"]["use_shape_condition"] = True
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="model_config.unet keys"):
+        load_model_config(path)
+
+
 def test_generation_rejects_changed_generator_checkpoint(
     tmp_path: Path,
 ) -> None:

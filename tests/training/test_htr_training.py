@@ -11,9 +11,11 @@ from torch import Tensor, nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 
+from vietparadiff.artifacts import sha256_file
 from vietparadiff.data.pipeline import HTRVocabulary
 from vietparadiff.training.htr import (
     HTRCheckpointConfig,
+    HTRAugmentationConfig,
     HTRDataConfig,
     HTREpochMetrics,
     HTRLossConfig,
@@ -28,10 +30,13 @@ from vietparadiff.training.htr import (
     ctc_loss,
     greedy_ctc_decode,
     learning_rate_factor,
+    load_htr_training_config,
     load_best_for_evaluation,
     micro_batch_loss_weight,
     minimum_ctc_steps,
     save_model_checkpoint,
+    save_htr_training_contract,
+    validate_htr_training_contract,
     validate_htr_dataset,
 )
 from vietparadiff.models.config import HTRConfig
@@ -141,6 +146,10 @@ def _config(tmp_path: Path) -> HTRTrainingConfig:
             minimum_learning_rate_ratio=0.1,
         ),
         loss=HTRLossConfig(),
+        augmentation=HTRAugmentationConfig(
+            ink_intensity_jitter=0.05,
+            gaussian_noise_std=0.01,
+        ),
         logging=HTRLoggingConfig(
             log_every_steps=1,
             decode_every_steps=1,
@@ -182,14 +191,23 @@ def _trainer(
         _vocabulary(),
         "vocab-hash",
         {
-            "train_lines": "a",
-            "train_words": "b",
-            "test_lines": "c",
-            "test_words": "d",
+            "train_lines": "a" * 64,
+            "train_words": "b" * 64,
+            "test_lines": "c" * 64,
+            "test_words": "d" * 64,
         },
         {"vocab_size": 8},
     )
     return trainer, model
+
+
+def test_guidance_and_evaluation_htr_configs_are_independent() -> None:
+    guidance = load_htr_training_config(Path("configs/htr/train.yaml"))
+    evaluator = load_htr_training_config(Path("configs/htr/eval.yaml"))
+    assert guidance.seed != evaluator.seed
+    assert guidance.augmentation != evaluator.augmentation
+    assert guidance.checkpoint.output_dir != evaluator.checkpoint.output_dir
+    assert guidance.data.vocabulary != evaluator.data.vocabulary
 
 
 def test_real_vietnamese_htr_forward_backward_is_finite() -> None:
@@ -518,12 +536,83 @@ def test_best_checkpoint_is_model_only_and_loads_strict(
         weights_only=True,
     )
     assert set(state) == {"model"}
+    contract = json.loads(
+        (
+            tmp_path
+            / "checkpoints"
+            / "inference_contract.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert contract["htr_checkpoint_sha256"] == sha256_file(
+        tmp_path / "checkpoints" / "best.pt"
+    )
+    assert contract["model_config_sha256"] == sha256_file(
+        tmp_path / "checkpoints" / "model_config.json"
+    )
+    assert contract["vocabulary_sha256"] == sha256_file(
+        tmp_path / "checkpoints" / "vocabulary.json"
+    )
+    training_contract = json.loads(
+        (
+            tmp_path
+            / "checkpoints"
+            / "training_contract.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert training_contract["seed"] == trainer.config.seed
+    assert training_contract["augmentation"] == {
+        "ink_intensity_jitter": 0.05,
+        "gaussian_noise_std": 0.01,
+    }
+    assert training_contract["checkpoint_selection"] == (
+        "minimum_train_loss"
+    )
+    assert training_contract["htr_checkpoint_sha256"] == sha256_file(
+        tmp_path / "checkpoints" / "best.pt"
+    )
     clone = TinyHTR()
     clone.load_state_dict(state["model"], strict=True)
     assert torch.equal(
         clone.projections["raw"].weight,
         model.projections["raw"].weight,
     )
+
+
+def test_htr_training_contract_binds_config_manifests_and_checkpoint(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config.data.train_lines.write_text("line\n", encoding="utf-8")
+    config.data.train_words.write_text("word\n", encoding="utf-8")
+    trainer, _ = _trainer(tmp_path, config)
+    trainer.save_epoch_checkpoints(
+        next_epoch=1,
+        train_checkpoint_score=0.2,
+    )
+    manifest_hashes = {
+        "train_lines": sha256_file(config.data.train_lines),
+        "train_words": sha256_file(config.data.train_words),
+    }
+    save_htr_training_contract(
+        config.checkpoint.output_dir,
+        config,
+        manifest_hashes,
+    )
+    payload = validate_htr_training_contract(config)
+    assert payload["seed"] == config.seed
+
+    changed = replace(
+        config,
+        augmentation=HTRAugmentationConfig(
+            ink_intensity_jitter=0.12,
+            gaussian_noise_std=0.025,
+        ),
+    )
+    with pytest.raises(
+        ValueError,
+        match="resolved_config_sha256",
+    ):
+        validate_htr_training_contract(changed)
 
 
 def test_final_evaluation_loader_uses_model_api(tmp_path: Path) -> None:

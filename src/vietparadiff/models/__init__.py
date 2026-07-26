@@ -8,6 +8,7 @@ from .config import (
     StyleEncoderConfig,
     TextEncoderConfig,
     VietParaDiffConfig,
+    WriterEncoderConfig,
 )
 from .htr import ConformerBlock, HTROutput, VietnameseHTR
 from .style import DualFrequencyStyleEncoder, StyleCondition
@@ -29,6 +30,7 @@ from .generator import (
     VietParaDiffInput,
     VietParaDiffOutput,
 )
+from .writer import ArcFaceHead, WriterStyleEncoder
 
 __all__ = [
     "AutoKLConfig",
@@ -37,6 +39,7 @@ __all__ = [
     "ParagraphUNetConfig",
     "HTRConfig",
     "VietParaDiffConfig",
+    "WriterEncoderConfig",
     "DiagonalGaussianDistribution",
     "AutoKLOutput",
     "HandwritingAutoKL",
@@ -59,4 +62,6 @@ __all__ = [
     "ParagraphUNet",
     "TextGuidedInterLineHarmonizer",
     "VietParaDiff",
+    "ArcFaceHead",
+    "WriterStyleEncoder",
 ]

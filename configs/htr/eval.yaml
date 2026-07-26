@@ -1,4 +1,4 @@
-seed: 42
+seed: 314159
 device: auto
 precision: auto
 
@@ -7,7 +7,7 @@ data:
   train_words: data/splits/htr/train_words.jsonl
   test_lines: data/splits/htr/test_lines.jsonl
   test_words: data/splits/htr/test_words.jsonl
-  vocabulary: data/splits/htr/vocabulary.json
+  vocabulary: data/splits/htr_eval/vocabulary.json
   image_root: .
   num_workers: 4
   line_batch_size: 4
@@ -37,8 +37,8 @@ loss:
   tone_weight: 0.25
 
 augmentation:
-  ink_intensity_jitter: 0.05
-  gaussian_noise_std: 0.01
+  ink_intensity_jitter: 0.12
+  gaussian_noise_std: 0.025
 
 logging:
   log_every_steps: 20
@@ -46,9 +46,9 @@ logging:
   tensorboard: true
   wandb: true
   wandb_mode: offline
-  wandb_project: vietparadiff-htr
+  wandb_project: vietparadiff-htr-evaluator
 
 checkpoint:
-  output_dir: outputs/htr
+  output_dir: outputs/htr_eval
   save_last: true
   save_best: true

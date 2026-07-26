@@ -309,9 +309,22 @@ def _strict_dataclass_payload(
     payload: object,
     dataclass_type: type[object],
     name: str,
+    *,
+    legacy_defaults: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     expected = {field.name for field in fields(dataclass_type)}
-    if not isinstance(payload, Mapping) or set(payload) != expected:
+    if not isinstance(payload, Mapping):
+        raise ValueError(
+            f"model_config.{name} phải là mapping."
+        )
+    actual_keys = set(payload)
+    defaults = dict(legacy_defaults or {})
+    missing_legacy = set(defaults)
+    if actual_keys == expected - missing_legacy:
+        migrated = dict(payload)
+        migrated.update(defaults)
+        return migrated
+    if actual_keys != expected:
         actual = sorted(payload) if isinstance(payload, Mapping) else type(payload).__name__
         raise ValueError(
             f"model_config.{name} keys phải bằng {sorted(expected)}, "
@@ -336,10 +349,21 @@ def load_model_config(path: Path) -> VietParaDiffConfig:
         payload["text"], TextEncoderConfig, "text"
     )
     style = _strict_dataclass_payload(
-        payload["style"], StyleEncoderConfig, "style"
+        payload["style"],
+        StyleEncoderConfig,
+        "style",
+        legacy_defaults={"use_high_frequency_style": True},
     )
     unet = _strict_dataclass_payload(
-        payload["unet"], ParagraphUNetConfig, "unet"
+        payload["unet"],
+        ParagraphUNetConfig,
+        "unet",
+        legacy_defaults={
+            "use_shape_condition": True,
+            "use_tone_condition": True,
+            "use_local_style_tokens": True,
+            "use_harmonizer": True,
+        },
     )
     autokl["channel_multipliers"] = tuple(
         int(item) for item in autokl["channel_multipliers"]  # type: ignore[union-attr]
@@ -380,6 +404,9 @@ def checkpoint_loading_config(
             foreground_threshold=stored.style.foreground_threshold,
             use_pretrained_backbone=False,
             convnext_checkpoint=None,
+            use_high_frequency_style=(
+                stored.style.use_high_frequency_style
+            ),
         ),
         unet=stored.unet,
     )

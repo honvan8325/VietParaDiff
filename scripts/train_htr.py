@@ -24,8 +24,10 @@ from vietparadiff.training.htr import (
     HTRTrainer,
     artifact_hashes,
     create_optimizer_and_scheduler,
+    ensure_htr_static_artifacts,
     load_best_for_evaluation,
     load_htr_training_config,
+    save_htr_inference_contract,
     validate_htr_dataset,
 )
 from vietparadiff.models.config import HTRConfig
@@ -153,7 +155,6 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     output_dir = config.checkpoint.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
-    vocabulary.save(output_dir / "vocabulary.json")
     model_config = HTRConfig(
         raw_vocab_size=len(vocabulary.raw_to_id),
         base_vocab_size=len(vocabulary.base_to_id),
@@ -161,9 +162,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         tone_vocab_size=len(vocabulary.tone_to_id),
     )
     model_config_payload = asdict(model_config)
-    (output_dir / "model_config.json").write_text(
-        json.dumps(model_config_payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+    ensure_htr_static_artifacts(
+        output_dir,
+        vocabulary,
+        model_config_payload,
     )
 
     loaders = {
@@ -270,6 +272,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             )
 
         best_path = output_dir / "best.pt"
+        save_htr_inference_contract(output_dir)
         load_best_for_evaluation(model, best_path, runtime.device)
         print(f"Loaded best model for final test: {best_path}")
         line_metrics = trainer.evaluate(

@@ -16,6 +16,7 @@ wheels/
 !/data/**/*.jsonl
 !/data/splits/**/*.json
 /outputs/**
+/checkpoints/vision/*.pt
 *repomix*
 *.zip
 .DS_Store

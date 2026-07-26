@@ -1,0 +1,32 @@
+device: auto
+
+generation:
+  directory: outputs/vietparadiff/evaluation
+  results: outputs/vietparadiff/evaluation/results.jsonl
+  evaluation_contract: outputs/vietparadiff/evaluation/evaluation_contract.json
+
+htr:
+  checkpoint: outputs/htr_eval/best.pt
+  model_config: outputs/htr_eval/model_config.json
+  vocabulary: outputs/htr_eval/vocabulary.json
+  guidance_checkpoint: outputs/htr/best.pt
+
+writer:
+  checkpoint: outputs/writer_metric/best.pt
+  model_config: outputs/writer_metric/model_config.json
+  vocabulary: outputs/writer_metric/writer_vocabulary.json
+  contract: outputs/writer_metric/inference_contract.json
+
+text:
+  generator_model_config: outputs/vietparadiff/htr_guided/model_config.json
+  image_root: .
+
+metrics:
+  foreground_threshold: 0.1
+  blank_foreground_fraction: 0.0005
+  mmd_subset_size: 100
+  mmd_subsets: 100
+  seed: 42
+
+output:
+  directory: outputs/vietparadiff/evaluation

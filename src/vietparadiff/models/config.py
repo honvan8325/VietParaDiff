@@ -110,6 +110,7 @@ class StyleEncoderConfig:
     foreground_threshold: float = 0.95
     use_pretrained_backbone: bool = True
     convnext_checkpoint: Path | None = None
+    use_high_frequency_style: bool = True
 
     def __post_init__(self) -> None:
         if self.reference_height != 256 or self.max_reference_width != 1536:
@@ -124,6 +125,8 @@ class StyleEncoderConfig:
             self.convnext_checkpoint, Path
         ):
             raise TypeError("convnext_checkpoint phải là pathlib.Path hoặc None.")
+        if not isinstance(self.use_high_frequency_style, bool):
+            raise TypeError("use_high_frequency_style phải là bool.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +146,10 @@ class ParagraphUNetConfig:
     harmonizer_layers: int = 2
     harmonizer_heads: int = 8
     prediction_type: Literal["v"] = "v"
+    use_shape_condition: bool = True
+    use_tone_condition: bool = True
+    use_local_style_tokens: bool = True
+    use_harmonizer: bool = True
 
     def __post_init__(self) -> None:
         if self.latent_channels != 4 or self.channels != (128, 256, 512, 768):
@@ -163,6 +170,18 @@ class ParagraphUNetConfig:
             raise ValueError("Harmonizer phải dùng dim=512, 2 layers, 8 heads.")
         if self.prediction_type != "v":
             raise ValueError("VietParaDiff phải dùng v-prediction.")
+        flags = (
+            self.use_shape_condition,
+            self.use_tone_condition,
+            self.use_local_style_tokens,
+            self.use_harmonizer,
+        )
+        if not all(isinstance(flag, bool) for flag in flags):
+            raise TypeError("Mọi U-Net behavior flag phải là bool.")
+        if self.use_tone_condition and not self.use_shape_condition:
+            raise ValueError(
+                "Tone conditioning yêu cầu shape conditioning được bật."
+            )
         if not 0.0 <= self.dropout < 1.0:
             raise ValueError("U-Net dropout phải nằm trong [0, 1).")
 
@@ -205,6 +224,27 @@ class HTRConfig:
             raise ValueError("HTR phải downsample width theo hệ số 4.")
         if not 0.0 <= self.dropout < 1.0:
             raise ValueError("HTR dropout phải nằm trong [0, 1).")
+
+
+@dataclass(frozen=True, slots=True)
+class WriterEncoderConfig:
+    input_channels: int = 1
+    embedding_dim: int = 256
+    input_height: int = 128
+    max_width: int = 1024
+    backbone: Literal["resnet18"] = "resnet18"
+
+    def __post_init__(self) -> None:
+        if self.input_channels != 1:
+            raise ValueError("Writer encoder chỉ nhận grayscale 1 channel.")
+        if self.embedding_dim != 256:
+            raise ValueError("Writer embedding dimension phải bằng 256.")
+        if self.input_height != 128 or self.max_width != 1024:
+            raise ValueError(
+                "Writer metric input phải cao 128, rộng tối đa 1024."
+            )
+        if self.backbone != "resnet18":
+            raise ValueError("Writer metric backbone phải là resnet18.")
 
 
 @dataclass(frozen=True, slots=True)

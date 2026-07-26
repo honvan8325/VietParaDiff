@@ -1,0 +1,25 @@
+seed: 42
+device: auto
+selection_protocol: writer_disjoint_internal_validation
+
+data:
+  line_manifest: data/splits/htr/train_lines.jsonl
+  paragraph_manifest: data/splits/autokl/train_paragraphs.jsonl
+  image_root: .
+  num_workers: 4
+  writers_per_batch: 8
+  samples_per_writer: 4
+  validation_writer_fraction: 0.1
+
+backbone:
+  checkpoint: checkpoints/vision/resnet18_imagenet1k_v1.pt
+  contract: checkpoints/vision/manifest.json
+
+optimizer:
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  epochs: 50
+  gradient_clip_norm: 1.0
+
+checkpoint:
+  output_dir: outputs/writer_metric

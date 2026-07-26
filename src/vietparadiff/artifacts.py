@@ -23,6 +23,68 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def verify_visual_backbone(
+    contract_path: Path,
+    *,
+    name: str,
+    checkpoint: Path,
+) -> str:
+    """Verify one local torchvision checkpoint against its manifest."""
+    if not contract_path.is_file():
+        raise FileNotFoundError(
+            f"Không tìm thấy visual backbone contract: {contract_path}"
+        )
+    payload = json.loads(contract_path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(payload, Mapping)
+        or set(payload) != {
+            "schema_version",
+            "torchvision_version",
+            "weights",
+        }
+        or payload["schema_version"] != 1
+        or not isinstance(payload["torchvision_version"], str)
+        or not isinstance(payload["weights"], Mapping)
+    ):
+        raise ValueError("Visual backbone contract sai schema.")
+    weights = payload["weights"]
+    if name not in weights:
+        raise ValueError(
+            f"Visual backbone contract không chứa {name!r}."
+        )
+    record = weights[name]
+    if not isinstance(record, Mapping) or set(record) != {
+        "filename",
+        "sha256",
+    }:
+        raise ValueError(
+            f"Visual backbone record {name!r} sai schema."
+        )
+    expected_path = contract_path.parent / str(record["filename"])
+    if checkpoint.resolve() != expected_path.resolve():
+        raise ValueError(
+            f"Checkpoint {name!r} phải là {expected_path}, nhận {checkpoint}."
+        )
+    expected_hash = str(record["sha256"])
+    if (
+        len(expected_hash) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in expected_hash
+        )
+    ):
+        raise ValueError(
+            f"Visual backbone SHA-256 của {name!r} không hợp lệ."
+        )
+    actual_hash = sha256_file(checkpoint)
+    if actual_hash != expected_hash:
+        raise ValueError(
+            f"Visual backbone {name!r} sai SHA-256: "
+            f"expected={expected_hash}, actual={actual_hash}."
+        )
+    return actual_hash
+
+
 @dataclass(frozen=True, slots=True)
 class LatentStatistics:
     """Scalar normalization statistics bound to one AutoKL checkpoint."""
@@ -203,4 +265,5 @@ __all__ = [
     "load_latent_statistics",
     "save_latent_statistics",
     "sha256_file",
+    "verify_visual_backbone",
 ]

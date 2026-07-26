@@ -1,0 +1,88 @@
+seeds: [42, 43, 44]
+output_root: outputs/experiments
+require_clean_git: true
+
+preflight:
+  data_audit: outputs/data_audit.json
+  data_split_root: data/splits
+  data_image_root: .
+  vision_contract: checkpoints/vision/manifest.json
+  convnext_checkpoint: checkpoints/vision/convnext_tiny_imagenet1k_v1.pt
+  resnet_checkpoint: checkpoints/vision/resnet18_imagenet1k_v1.pt
+  autokl_checkpoint: outputs/autokl/best.pt
+  latent_statistics: outputs/autokl/latent_statistics.json
+  guidance_htr_checkpoint: outputs/htr/best.pt
+  guidance_htr_model_config: outputs/htr/model_config.json
+  guidance_htr_vocabulary: outputs/htr/vocabulary.json
+  evaluation_htr_checkpoint: outputs/htr_eval/best.pt
+  evaluation_htr_model_config: outputs/htr_eval/model_config.json
+  evaluation_htr_vocabulary: outputs/htr_eval/vocabulary.json
+  writer_checkpoint: outputs/writer_metric/best.pt
+  writer_model_config: outputs/writer_metric/model_config.json
+  writer_vocabulary: outputs/writer_metric/writer_vocabulary.json
+  writer_contract: outputs/writer_metric/inference_contract.json
+
+base_configs:
+  pretrain: configs/vietparadiff/pretrain.yaml
+  finetune: configs/vietparadiff/finetune.yaml
+  htr_guided: configs/vietparadiff/htr_guided.yaml
+  evaluate: configs/vietparadiff/evaluate.yaml
+  metrics: configs/vietparadiff/metrics.yaml
+
+variants:
+- name: a0
+  use_shape_condition: false
+  use_tone_condition: false
+  use_high_frequency_style: false
+  use_local_style_tokens: false
+  use_harmonizer: false
+  use_synthetic_data: false
+  use_htr_guidance: false
+- name: a1
+  use_shape_condition: true
+  use_tone_condition: true
+  use_high_frequency_style: false
+  use_local_style_tokens: false
+  use_harmonizer: false
+  use_synthetic_data: false
+  use_htr_guidance: false
+- name: a2
+  use_shape_condition: true
+  use_tone_condition: true
+  use_high_frequency_style: true
+  use_local_style_tokens: true
+  use_harmonizer: false
+  use_synthetic_data: false
+  use_htr_guidance: false
+- name: a3
+  use_shape_condition: true
+  use_tone_condition: true
+  use_high_frequency_style: true
+  use_local_style_tokens: true
+  use_harmonizer: true
+  use_synthetic_data: false
+  use_htr_guidance: false
+- name: a4
+  use_shape_condition: true
+  use_tone_condition: true
+  use_high_frequency_style: true
+  use_local_style_tokens: true
+  use_harmonizer: true
+  use_synthetic_data: true
+  use_htr_guidance: false
+- name: full
+  use_shape_condition: true
+  use_tone_condition: true
+  use_high_frequency_style: true
+  use_local_style_tokens: true
+  use_harmonizer: true
+  use_synthetic_data: true
+  use_htr_guidance: true
+
+external_baselines:
+- name: one_dm
+  config_pattern: configs/baselines/one_dm/seed_{seed}.yaml
+  output_pattern: outputs/experiments/one_dm/seed_{seed}/evaluation
+- name: paragraph_ldm
+  config_pattern: configs/baselines/paragraph_ldm/seed_{seed}.yaml
+  output_pattern: outputs/experiments/paragraph_ldm/seed_{seed}/evaluation

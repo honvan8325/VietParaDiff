@@ -273,6 +273,9 @@ class ConditionedLevel(nn.Module):
         self.main_attention = SpatialTransformer(channels, config, attention_mode)
         self.shape_adapter = GraphemeResidualAdapter(channels, config) if use_shape else None
         self.tone_adapter = GraphemeResidualAdapter(channels, config) if use_tone else None
+        self.use_shape_condition = config.use_shape_condition
+        self.use_tone_condition = config.use_tone_condition
+        self.use_local_style_tokens = config.use_local_style_tokens
 
     def forward(
         self,
@@ -285,17 +288,27 @@ class ConditionedLevel(nn.Module):
         for block in self.resblocks:
             features, norm = block(features, timestep, style.global_style)
             film_norms.append(norm)
-        style_mask = torch.ones(
-            features.shape[0],
-            style.local_tokens.shape[1],
-            dtype=torch.bool,
-            device=features.device,
-        )
-        main_context = torch.cat((grapheme.base_context, style.local_tokens), dim=1)
-        main_mask = torch.cat((grapheme.attention_mask, style_mask), dim=1)
+        if self.use_local_style_tokens:
+            style_mask = torch.ones(
+                features.shape[0],
+                style.local_tokens.shape[1],
+                dtype=torch.bool,
+                device=features.device,
+            )
+            main_context = torch.cat(
+                (grapheme.base_context, style.local_tokens),
+                dim=1,
+            )
+            main_mask = torch.cat(
+                (grapheme.attention_mask, style_mask),
+                dim=1,
+            )
+        else:
+            main_context = grapheme.base_context
+            main_mask = grapheme.attention_mask
         features = self.main_attention(features, main_context, main_mask)
         shape_norms: list[Tensor] = []
-        if self.shape_adapter is not None:
+        if self.shape_adapter is not None and self.use_shape_condition:
             residual, norm = self.shape_adapter(
                 features,
                 grapheme.shape_context,
@@ -305,7 +318,7 @@ class ConditionedLevel(nn.Module):
             features = features + residual
             shape_norms.append(norm)
         tone_norms: list[Tensor] = []
-        if self.tone_adapter is not None:
+        if self.tone_adapter is not None and self.use_tone_condition:
             residual, norm = self.tone_adapter(
                 features,
                 grapheme.tone_context,
@@ -583,6 +596,15 @@ class ParagraphUNet(nn.Module):
         self.output_norm = nn.GroupNorm(config.group_norm_groups, high)
         self.output_conv = nn.Conv2d(high, 4, 3, padding=1)
 
+    @staticmethod
+    def _mean_norm(
+        norms: list[Tensor],
+        reference: Tensor,
+    ) -> Tensor:
+        if norms:
+            return torch.stack(norms).mean()
+        return reference.sum() * 0.0
+
     def forward(
         self,
         noisy_latents: Tensor,
@@ -638,20 +660,37 @@ class ParagraphUNet(nn.Module):
         shape_norms.extend(shape)
         tone_norms.extend(tone)
         film_norms.extend(film)
-        deep, line_tokens, harmonizer_norm = self.harmonizer(
+        harmonized, line_tokens, harmonizer_norm = self.harmonizer(
             deep,
             grapheme,
             style.global_style,
         )
+        if self.config.use_harmonizer:
+            deep = harmonized
+        else:
+            harmonizer_norm = deep.sum() * 0.0
         deep_skip = deep
 
         deep, norm = self.middle1(deep, timestep, style.global_style)
         film_norms.append(norm)
-        style_mask = torch.ones(
-            batch, style.local_tokens.shape[1], dtype=torch.bool, device=deep.device
-        )
-        context = torch.cat((grapheme.base_context, style.local_tokens), dim=1)
-        context_mask = torch.cat((grapheme.attention_mask, style_mask), dim=1)
+        if self.config.use_local_style_tokens:
+            style_mask = torch.ones(
+                batch,
+                style.local_tokens.shape[1],
+                dtype=torch.bool,
+                device=deep.device,
+            )
+            context = torch.cat(
+                (grapheme.base_context, style.local_tokens),
+                dim=1,
+            )
+            context_mask = torch.cat(
+                (grapheme.attention_mask, style_mask),
+                dim=1,
+            )
+        else:
+            context = grapheme.base_context
+            context_mask = grapheme.attention_mask
         deep = self.middle_attention(deep, context, context_mask)
         deep, norm = self.middle2(deep, timestep, style.global_style)
         film_norms.append(norm)
@@ -701,8 +740,8 @@ class ParagraphUNet(nn.Module):
 
         velocity = self.output_conv(F.silu(self.output_norm(high)))
         diagnostics = {
-            "shape_residual_norm": torch.stack(shape_norms).mean(),
-            "tone_residual_norm": torch.stack(tone_norms).mean(),
+            "shape_residual_norm": self._mean_norm(shape_norms, velocity),
+            "tone_residual_norm": self._mean_norm(tone_norms, velocity),
             "style_film_norm": torch.stack(film_norms).mean(),
             "harmonizer_delta_norm": harmonizer_norm,
         }

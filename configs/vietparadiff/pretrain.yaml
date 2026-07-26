@@ -1,6 +1,15 @@
 seed: 42
 device: auto
 precision: auto
+stage: pretrain
+initialization: null
+guidance: null
+behavior:
+  use_shape_condition: true
+  use_tone_condition: true
+  use_high_frequency_style: true
+  use_local_style_tokens: true
+  use_harmonizer: true
 
 data:
   train_targets: data/splits/vietparadiff/pretrain_targets.jsonl
@@ -16,7 +25,8 @@ autokl:
 
 style:
   use_pretrained_backbone: true
-  convnext_checkpoint: null
+  convnext_checkpoint: checkpoints/vision/convnext_tiny_imagenet1k_v1.pt
+  backbone_contract: checkpoints/vision/manifest.json
 
 diffusion:
   epochs: 100
