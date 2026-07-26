@@ -4,18 +4,20 @@ from __future__ import annotations
 
 import json
 import shutil
-from collections import defaultdict
 from pathlib import Path
 
 from PIL import Image
 from tqdm import tqdm
 
+from vietparadiff.data.build_provenance import (
+    BUILDER_CONFIGS,
+    BuildIssues,
+    write_build_report,
+)
 from vietparadiff.data.image_utils import save_normalized_image
 from vietparadiff.data.paragraph_labels import (
     align_sequential_paragraph_lines,
-    flatten_whitespace,
     join_paragraph_lines,
-    split_indexed_line_stem,
 )
 from vietparadiff.cli_logging import get_logger
 
@@ -35,70 +37,6 @@ LEVEL_DIRS = {
     "paragraph": RAW / "UIT_HWDB_paragraph",
 }
 
-VNON_PROCESSED = Path("data/raw/VNOnDB/Data_processed")
-VNON_LINE_DIR = VNON_PROCESSED / "InkData_line_processed"
-VNON_PARAGRAPH_DIR = VNON_PROCESSED / "InkData_paragraph_processed"
-
-
-def _load_vnondb_line_fallbacks() -> dict[
-    tuple[str, ...],
-    list[dict[str, tuple[str, ...]]],
-]:
-    """Index VNOnDB line labels for UIT writers with incomplete line exports."""
-    if not VNON_LINE_DIR.exists() or not VNON_PARAGRAPH_DIR.exists():
-        return {}
-
-    indexed_lines: dict[str, list[tuple[int, str]]] = defaultdict(list)
-    for text_path in sorted(VNON_LINE_DIR.glob("*.txt")):
-        try:
-            text = text_path.read_text(encoding="utf-8-sig").strip()
-            paragraph_stem, line_index = split_indexed_line_stem(
-                text_path.stem
-            )
-        except (OSError, UnicodeDecodeError, ValueError):
-            continue
-        if text:
-            indexed_lines[paragraph_stem].append((line_index, text))
-
-    paragraphs_by_writer: dict[str, list[tuple[str, str]]] = defaultdict(list)
-    for text_path in sorted(VNON_PARAGRAPH_DIR.glob("*.txt")):
-        try:
-            text = text_path.read_text(encoding="utf-8-sig").strip()
-        except (OSError, UnicodeDecodeError):
-            continue
-        parts = text_path.stem.split("_")
-        if text and len(parts) >= 2:
-            paragraphs_by_writer["_".join(parts[:2])].append(
-                (text_path.stem, text)
-            )
-
-    fallbacks: dict[
-        tuple[str, ...],
-        list[dict[str, tuple[str, ...]]],
-    ] = defaultdict(list)
-    for paragraphs in paragraphs_by_writer.values():
-        signature = tuple(
-            sorted(flatten_whitespace(text) for _, text in paragraphs)
-        )
-        segments: dict[str, tuple[str, ...]] = {}
-        for paragraph_stem, paragraph_text in paragraphs:
-            line_texts = tuple(
-                line_text
-                for _, line_text in sorted(
-                    indexed_lines.get(paragraph_stem, ()),
-                    key=lambda item: item[0],
-                )
-            )
-            try:
-                join_paragraph_lines(paragraph_text, line_texts)
-            except ValueError:
-                continue
-            segments[flatten_whitespace(paragraph_text)] = line_texts
-        if segments:
-            fallbacks[signature].append(segments)
-    return dict(fallbacks)
-
-
 def build_uithwdb_dataset() -> None:
     """Rebuild UIT-HWDB paragraph, line, and word samples.
 
@@ -111,6 +49,7 @@ def build_uithwdb_dataset() -> None:
         ``data/uithwdb`` is deleted before the new dataset is written.
     """
     logger.info("Build UIT-HWDB dataset")
+    issues = BuildIssues()
 
     if OUT.exists():
         logger.warning(f"Removing existing output folder: {OUT}")
@@ -131,6 +70,11 @@ def build_uithwdb_dataset() -> None:
 
             if not split_root.exists():
                 logger.warning(f"Data folder not found: {split_root}")
+                issues.hard(
+                    f"{level}:{split_folder}",
+                    "missing_data_folder",
+                    split_root,
+                )
                 continue
 
             writer_dirs = sorted(
@@ -155,20 +99,35 @@ def build_uithwdb_dataset() -> None:
         label_path = writer_dir / "label.json"
         if not label_path.exists():
             logger.warning(f"Label not found: {label_path}")
+            issues.hard(
+                f"{level}:{split_folder}:{writer_dir.name}",
+                "missing_label_file",
+                label_path,
+            )
             continue
         try:
             with label_path.open("r", encoding="utf-8") as file:
                 labels = json.load(file)
         except (OSError, json.JSONDecodeError) as error:
             logger.warning(f"Cannot read label file {label_path}: {error}")
+            issues.hard(
+                f"{level}:{split_folder}:{writer_dir.name}",
+                "invalid_label_file",
+                label_path,
+                str(error),
+            )
             continue
         if not isinstance(labels, dict):
             logger.warning(f"Invalid label format: {label_path}")
+            issues.hard(
+                f"{level}:{split_folder}:{writer_dir.name}",
+                "invalid_label_schema",
+                label_path,
+            )
             continue
         labels_by_job[key] = labels
 
     paragraph_lines: dict[tuple[str, str, str], tuple[str, ...]] = {}
-    fallback_index = _load_vnondb_line_fallbacks()
     writer_keys = sorted(
         {
             (split_folder, writer_dir.name)
@@ -212,27 +171,20 @@ def build_uithwdb_dataset() -> None:
                 (split_folder, writer_raw, image_name)
             ] = line_texts
 
-        if unmatched:
-            signature = tuple(
-                sorted(
-                    flatten_whitespace(text)
-                    for _, text in ordered_paragraphs
-                )
+        for image_name in unmatched:
+            issues.reject(
+                (
+                    f"uithwdb_paragraph_{writer_raw}_"
+                    f"{Path(image_name).stem}"
+                ),
+                "missing_native_line_alignment",
+                (
+                    LEVEL_DIRS["paragraph"]
+                    / split_folder
+                    / writer_raw
+                    / image_name
+                ),
             )
-            fallback_candidates = fallback_index.get(signature, ())
-            if len(fallback_candidates) == 1:
-                fallback = fallback_candidates[0]
-                paragraph_text_by_name = dict(ordered_paragraphs)
-                for image_name in unmatched:
-                    line_texts = fallback.get(
-                        flatten_whitespace(
-                            paragraph_text_by_name[image_name]
-                        )
-                    )
-                    if line_texts is not None:
-                        paragraph_lines[
-                            (split_folder, writer_raw, image_name)
-                        ] = line_texts
 
     # Process every granularity through the same normalization path because
     # UIT-HWDB uses the same label-file format at all three levels.
@@ -263,12 +215,22 @@ def build_uithwdb_dataset() -> None:
 
             if not isinstance(text, str):
                 logger.warning(f"Invalid transcript: {label_path} | {image_name}")
+                issues.hard(
+                    f"uithwdb_{level}_{writer_raw}_{Path(image_name).stem}",
+                    "invalid_transcript_type",
+                    label_path,
+                )
                 continue
 
             text = text.strip()
 
             if not text:
                 logger.warning(f"Empty transcript: {label_path} | {image_name}")
+                issues.hard(
+                    f"uithwdb_{level}_{writer_raw}_{Path(image_name).stem}",
+                    "empty_transcript",
+                    label_path,
+                )
                 continue
             if level == "paragraph":
                 line_texts = paragraph_lines.get(
@@ -279,6 +241,7 @@ def build_uithwdb_dataset() -> None:
                         "Line labels not found for paragraph: "
                         f"{label_path} | {image_name}"
                     )
+                    # This path is already classified during native alignment.
                     continue
                 try:
                     text = join_paragraph_lines(text, line_texts)
@@ -286,12 +249,26 @@ def build_uithwdb_dataset() -> None:
                     logger.warning(
                         f"{error} Paragraph: {label_path} | {image_name}"
                     )
+                    issues.hard(
+                        (
+                            f"uithwdb_paragraph_{writer_raw}_"
+                            f"{Path(image_name).stem}"
+                        ),
+                        "paragraph_line_label_conflict",
+                        label_path,
+                        str(error),
+                    )
                     continue
 
             image_source = writer_dir / image_name
 
             if not image_source.exists():
                 logger.warning(f"Image not found: {image_source}")
+                issues.hard(
+                    f"uithwdb_{level}_{writer_raw}_{Path(image_name).stem}",
+                    "missing_image",
+                    image_source,
+                )
                 continue
 
             sample_raw = Path(image_name).stem
@@ -309,6 +286,12 @@ def build_uithwdb_dataset() -> None:
                     )
             except OSError as error:
                 logger.warning(f"Cannot process image {image_source}: {error}")
+                issues.hard(
+                    sample_id,
+                    "image_decode_failure",
+                    image_source,
+                    str(error),
+                )
                 continue
 
             manifest.append(
@@ -350,3 +333,14 @@ def build_uithwdb_dataset() -> None:
     logger.info(f"Words: {word_count}")
     logger.info(f"Total: {len(manifest)}")
     logger.info(f"Manifest: {MANIFEST}")
+    write_build_report(
+        dataset="uithwdb",
+        raw_root=next(iter(LEVEL_DIRS.values())).parent,
+        manifest=MANIFEST,
+        output=OUT / "build_report.json",
+        builder_config=BUILDER_CONFIGS["uithwdb"],
+        accepted_count=len(manifest),
+        expected_rejections=issues.expected_rejections,
+        hard_errors=issues.hard_errors,
+        warnings=issues.warnings,
+    )

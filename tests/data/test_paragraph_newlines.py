@@ -82,17 +82,6 @@ def test_uithwdb_builder_uses_ordered_line_labels(
     monkeypatch.setattr(uithwdb, "OUT", output)
     monkeypatch.setattr(uithwdb, "IMAGES", output / "images")
     monkeypatch.setattr(uithwdb, "MANIFEST", output / "manifest.jsonl")
-    monkeypatch.setattr(
-        uithwdb,
-        "VNON_LINE_DIR",
-        tmp_path / "missing_vnondb_lines",
-    )
-    monkeypatch.setattr(
-        uithwdb,
-        "VNON_PARAGRAPH_DIR",
-        tmp_path / "missing_vnondb_paragraphs",
-    )
-
     uithwdb.build_uithwdb_dataset()
 
     records = read_manifest(output / "manifest.jsonl")
@@ -102,7 +91,7 @@ def test_uithwdb_builder_uses_ordered_line_labels(
     assert paragraph["text"] == "Dòng một\nDòng hai"
 
 
-def test_uithwdb_builder_uses_unique_vnondb_fallback(
+def test_uithwdb_builder_rejects_missing_native_line_alignment(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -128,33 +117,11 @@ def test_uithwdb_builder_uses_unique_vnondb_fallback(
         for image_name in labels:
             save_image(writer / image_name)
 
-    vnon_lines = tmp_path / "vnon_lines"
-    vnon_paragraphs = tmp_path / "vnon_paragraphs"
-    vnon_lines.mkdir()
-    vnon_paragraphs.mkdir()
-    paragraph_labels = (
-        ("20240101_0001_doc_0", ("Đoạn đầu", "còn lại")),
-        ("20240101_0001_doc_1", ("Đoạn sau", "kết thúc")),
-    )
-    for paragraph_stem, lines in paragraph_labels:
-        (vnon_paragraphs / f"{paragraph_stem}.txt").write_text(
-            " ".join(lines),
-            encoding="utf-8",
-        )
-        for index, text in enumerate(lines):
-            (vnon_lines / f"{paragraph_stem}_{index}.txt").write_text(
-                text,
-                encoding="utf-8",
-            )
-
     output = tmp_path / "uithwdb_fallback"
     monkeypatch.setattr(uithwdb, "LEVEL_DIRS", level_dirs)
     monkeypatch.setattr(uithwdb, "OUT", output)
     monkeypatch.setattr(uithwdb, "IMAGES", output / "images")
     monkeypatch.setattr(uithwdb, "MANIFEST", output / "manifest.jsonl")
-    monkeypatch.setattr(uithwdb, "VNON_LINE_DIR", vnon_lines)
-    monkeypatch.setattr(uithwdb, "VNON_PARAGRAPH_DIR", vnon_paragraphs)
-
     uithwdb.build_uithwdb_dataset()
 
     paragraphs = [
@@ -162,10 +129,14 @@ def test_uithwdb_builder_uses_unique_vnondb_fallback(
         for record in read_manifest(output / "manifest.jsonl")
         if record["level"] == "paragraph"
     ]
-    assert [record["text"] for record in paragraphs] == [
-        "Đoạn đầu\ncòn lại",
-        "Đoạn sau\nkết thúc",
-    ]
+    assert paragraphs == []
+    report = json.loads(
+        (output / "build_report.json").read_text(encoding="utf-8")
+    )
+    assert report["expected_rejection_count"] == 2
+    assert {
+        item["reason"] for item in report["expected_rejections"]
+    } == {"missing_native_line_alignment"}
 
 
 def test_vnondb_builder_uses_parent_line_ids(

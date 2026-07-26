@@ -10,6 +10,11 @@ from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
 
+from vietparadiff.data.build_provenance import (
+    BUILDER_CONFIGS,
+    BuildIssues,
+    write_build_report,
+)
 from vietparadiff.data.image_utils import save_normalized_image
 from vietparadiff.data.paragraph_labels import (
     join_paragraph_lines,
@@ -49,6 +54,7 @@ def build_vnondb_dataset() -> None:
         ``data/vnondb`` is deleted before the new dataset is written.
     """
     logger.info("Build VNOnDB dataset")
+    issues = BuildIssues()
 
     for level, source_dir in LEVEL_DIRS.items():
         if not source_dir.exists():
@@ -60,9 +66,20 @@ def build_vnondb_dataset() -> None:
             text = text_source.read_text(encoding="utf-8-sig").strip()
         except (OSError, UnicodeDecodeError) as error:
             logger.warning(f"Cannot read line transcript {text_source}: {error}")
+            issues.hard(
+                text_source.stem,
+                "line_transcript_decode_failure",
+                text_source,
+                str(error),
+            )
             continue
         if not text:
             logger.warning(f"Empty line transcript: {text_source}")
+            issues.hard(
+                text_source.stem,
+                "empty_line_transcript",
+                text_source,
+            )
             continue
         try:
             paragraph_stem, line_index = split_indexed_line_stem(
@@ -70,6 +87,12 @@ def build_vnondb_dataset() -> None:
             )
         except ValueError as error:
             logger.warning(f"{error} File: {text_source}")
+            issues.hard(
+                text_source.stem,
+                "invalid_line_identifier",
+                text_source,
+                str(error),
+            )
             continue
         paragraph_lines[paragraph_stem].append((line_index, text))
 
@@ -111,6 +134,11 @@ def build_vnondb_dataset() -> None:
 
         if not text_source.exists():
             logger.warning(f"Transcript not found: {text_source}")
+            issues.hard(
+                image_source.stem,
+                "missing_transcript",
+                image_source,
+            )
             continue
 
         try:
@@ -119,10 +147,21 @@ def build_vnondb_dataset() -> None:
             ).strip()
         except UnicodeDecodeError as error:
             logger.warning(f"Cannot decode transcript {text_source}: {error}")
+            issues.hard(
+                image_source.stem,
+                "transcript_decode_failure",
+                text_source,
+                str(error),
+            )
             continue
 
         if not text:
             logger.warning(f"Empty transcript: {text_source}")
+            issues.hard(
+                image_source.stem,
+                "empty_transcript",
+                text_source,
+            )
             continue
 
         raw_id = image_source.stem
@@ -131,6 +170,11 @@ def build_vnondb_dataset() -> None:
             if not indexed_lines:
                 logger.warning(
                     f"Line transcripts not found for paragraph: {image_source}"
+                )
+                issues.reject(
+                    image_source.stem,
+                    "missing_native_line_alignment",
+                    image_source,
                 )
                 continue
             line_texts = [
@@ -144,6 +188,12 @@ def build_vnondb_dataset() -> None:
                 text = join_paragraph_lines(text, line_texts)
             except ValueError as error:
                 logger.warning(f"{error} Paragraph: {text_source}")
+                issues.hard(
+                    image_source.stem,
+                    "paragraph_line_label_conflict",
+                    text_source,
+                    str(error),
+                )
                 continue
 
         # VNOnDB embeds the writer key in the first two underscore-separated
@@ -153,6 +203,11 @@ def build_vnondb_dataset() -> None:
 
         if len(id_parts) < 2:
             logger.warning(f"Cannot determine writer ID: {image_source.name}")
+            issues.hard(
+                raw_id,
+                "invalid_writer_identifier",
+                image_source,
+            )
             continue
 
         writer_raw = "_".join(id_parts[:2])
@@ -171,6 +226,12 @@ def build_vnondb_dataset() -> None:
                 )
         except OSError as error:
             logger.warning(f"Cannot process image {image_source}: {error}")
+            issues.hard(
+                sample_id,
+                "image_decode_failure",
+                image_source,
+                str(error),
+            )
             continue
 
         manifest.append(
@@ -211,3 +272,14 @@ def build_vnondb_dataset() -> None:
     logger.info(f"Words: {word_count}")
     logger.info(f"Total: {len(manifest)}")
     logger.info(f"Manifest: {MANIFEST}")
+    write_build_report(
+        dataset="vnondb",
+        raw_root=next(iter(LEVEL_DIRS.values())).parent,
+        manifest=MANIFEST,
+        output=OUT / "build_report.json",
+        builder_config=BUILDER_CONFIGS["vnondb"],
+        accepted_count=len(manifest),
+        expected_rejections=issues.expected_rejections,
+        hard_errors=issues.hard_errors,
+        warnings=issues.warnings,
+    )

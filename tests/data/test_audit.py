@@ -106,15 +106,15 @@ def test_audit_detects_core_invariant_failures(tmp_path: Path) -> None:
         workers=1,
     ).run()
     codes = set(report["error_counts"])
-    assert report["schema_version"] == 2
+    assert report["schema_version"] == 3
     assert report["dataset_snapshot_sha256"]
     assert report["image_inventory_sha256"]
     assert report["manifest_sha256"]
     assert {
         "writer_leakage",
         "missing_image",
-        "duplicate_image_content",
+        "duplicate_cross_writer",
         "formatter_rejection",
-        "ctc_infeasible",
         "reference_ineligible",
     }.issubset(codes)
+    assert report["hard_error_count"] > 0

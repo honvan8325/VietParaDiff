@@ -557,22 +557,26 @@ def validate_data_audit_report(
         "split_root",
         "image_root",
         "manifest_sha256",
+        "provenance_sha256",
         "image_inventory_sha256",
+        "provenance_inventory_sha256",
         "dataset_snapshot_sha256",
         "snapshot_image_count",
-        "error_count",
+        "hard_error_count",
+        "expected_rejection_count",
+        "warning_count",
     }
     if (
         not isinstance(audit, Mapping)
         or not required.issubset(audit)
-        or audit.get("schema_version") != 2
-        or not isinstance(audit.get("error_count"), int)
+        or audit.get("schema_version") != 3
+        or not isinstance(audit.get("hard_error_count"), int)
     ):
-        raise ValueError("Full-data audit report schema v2 không hợp lệ.")
-    if audit["error_count"] != 0:
+        raise ValueError("Full-data audit report schema v3 không hợp lệ.")
+    if audit["hard_error_count"] != 0:
         raise ValueError(
             "Paper preflight từ chối data audit có "
-            f"error_count={audit['error_count']}."
+            f"hard_error_count={audit['hard_error_count']}."
         )
     if (
         audit["split_root"] != str(split_root)

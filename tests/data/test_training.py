@@ -227,6 +227,109 @@ def test_htr_vocabulary_is_train_only_and_collate_pads_width(
     assert HTRVocabulary.load(vocabulary_path) == vocabulary
 
 
+def test_htr_ctc_padding_preserves_detached_vietnamese_marks(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "marked.png"
+    image = Image.new("L", (32, 32), 255)
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((8, 14, 24, 27), fill=0)
+    draw.rectangle((14, 5, 16, 7), fill=0)  # detached tone/dot fixture
+    image.save(image_path)
+    image.close()
+    manifest = tmp_path / "htr.jsonl"
+    text = "ậ" * 24
+    write_jsonl(
+        manifest,
+        [
+            {
+                "id": "marked",
+                "image": str(image_path),
+                "text": text,
+                "level": "line",
+            }
+        ],
+    )
+    vocabulary = HTRVocabulary.build_from_manifests(manifest)
+    processed = HTRImageProcessor()(image_path)
+    sample = HTRDataset(manifest, vocabulary)[0]
+    tensor = sample["image"]
+    assert isinstance(tensor, torch.Tensor)
+    assert int(sample["valid_width"]) > int(processed["valid_width"])
+    required = vocabulary.minimum_input_width(text)
+    assert int(sample["valid_width"]) == required
+    original = tensor[:, :, : int(processed["valid_width"])]
+    foreground = original < 0.5
+    assert foreground[:, :28].any()  # detached upper mark remains
+    assert foreground[:, 28:].any()  # main body remains
+    assert torch.equal(
+        tensor[:, :, int(processed["valid_width"]) :],
+        torch.ones_like(tensor[:, :, int(processed["valid_width"]) :]),
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "mark_box"),
+    [
+        ("á", (15, 3, 17, 5)),
+        ("à", (12, 3, 14, 5)),
+        ("ả", (15, 2, 17, 5)),
+        ("ã", (13, 2, 18, 4)),
+        ("ạ", (15, 27, 17, 29)),
+        ("â", (12, 3, 18, 6)),
+        ("ă", (12, 3, 18, 6)),
+        ("ơ", (25, 10, 28, 13)),
+        ("ư", (25, 10, 28, 13)),
+        ("i", (15, 3, 17, 5)),
+        (".", (27, 26, 29, 28)),
+        (",", (27, 26, 29, 30)),
+        ("!", (27, 4, 29, 8)),
+        ("?", (26, 3, 30, 8)),
+    ],
+)
+def test_htr_preprocessing_never_discards_meaningful_detached_components(
+    tmp_path: Path,
+    text: str,
+    mark_box: tuple[int, int, int, int],
+) -> None:
+    path = tmp_path / f"fixture_{ord(text)}.png"
+    image = Image.new("L", (32, 32), 255)
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((8, 12, 23, 24), fill=0)
+    draw.rectangle(mark_box, fill=0)
+    image.save(path)
+    image.close()
+    processed = HTRImageProcessor()(path)["image"]
+    assert isinstance(processed, torch.Tensor)
+    foreground = processed[0] < 0.5
+
+    # Count 4-connected foreground regions after preprocessing. The fixture
+    # deliberately contains a main body and a semantic detached mark.
+    remaining = foreground.clone()
+    components = 0
+    while remaining.any():
+        components += 1
+        start = torch.nonzero(remaining, as_tuple=False)[0]
+        stack = [(int(start[0]), int(start[1]))]
+        remaining[stack[0]] = False
+        while stack:
+            row, column = stack.pop()
+            for next_row, next_column in (
+                (row - 1, column),
+                (row + 1, column),
+                (row, column - 1),
+                (row, column + 1),
+            ):
+                if (
+                    0 <= next_row < remaining.shape[0]
+                    and 0 <= next_column < remaining.shape[1]
+                    and bool(remaining[next_row, next_column])
+                ):
+                    remaining[next_row, next_column] = False
+                    stack.append((next_row, next_column))
+    assert components >= 2, f"Detached component bị mất cho {text!r}."
+
+
 def test_autokl_height_sampler_and_collate(tmp_path: Path) -> None:
     images = []
     records = []

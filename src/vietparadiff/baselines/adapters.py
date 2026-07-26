@@ -58,6 +58,9 @@ class ExternalBaselineConfig:
     expected_commit: str
     checkpoint: Path
     checkpoint_sha256: str
+    adapter_script: Path
+    adapter_sha256: str
+    backend_script: Path
     command: tuple[str, ...]
     test_pairs: Path
     image_root: Path
@@ -81,9 +84,23 @@ class ExternalBaselineConfig:
             )
         ):
             raise ValueError("Baseline checkpoint SHA-256 không hợp lệ.")
+        if (
+            len(self.adapter_sha256) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.adapter_sha256
+            )
+        ):
+            raise ValueError("Baseline adapter SHA-256 không hợp lệ.")
         if not self.command or any(not item for item in self.command):
             raise ValueError("Baseline command không được rỗng.")
-        required = {"{requests}", "{output_dir}"}
+        required = {
+            "{adapter}",
+            "{backend}",
+            "{checkout}",
+            "{requests}",
+            "{output_dir}",
+        }
         joined = "\n".join(self.command)
         if not all(token in joined for token in required):
             raise ValueError(
@@ -107,6 +124,9 @@ def load_external_baseline_config(
         "expected_commit",
         "checkpoint",
         "checkpoint_sha256",
+        "adapter_script",
+        "adapter_sha256",
+        "backend_script",
         "command",
         "test_pairs",
         "image_root",
@@ -130,6 +150,9 @@ def load_external_baseline_config(
         expected_commit=str(raw["expected_commit"]),
         checkpoint=Path(str(raw["checkpoint"])),
         checkpoint_sha256=str(raw["checkpoint_sha256"]),
+        adapter_script=Path(str(raw["adapter_script"])),
+        adapter_sha256=str(raw["adapter_sha256"]),
+        backend_script=Path(str(raw["backend_script"])),
         command=tuple(command),
         test_pairs=Path(str(raw["test_pairs"])),
         image_root=Path(str(raw["image_root"])),
@@ -171,10 +194,45 @@ def preflight_external_baseline(
     checkpoint_hash = sha256_file(config.checkpoint)
     if checkpoint_hash != config.checkpoint_sha256:
         raise ValueError("External baseline checkpoint SHA-256 mismatch.")
+    if not config.adapter_script.is_file():
+        raise FileNotFoundError(
+            f"Baseline adapter script không tồn tại: {config.adapter_script}"
+        )
+    adapter_hash = sha256_file(config.adapter_script)
+    if adapter_hash != config.adapter_sha256:
+        raise ValueError("External baseline adapter SHA-256 mismatch.")
+    try:
+        backend_relative = config.backend_script.resolve().relative_to(
+            config.checkout.resolve()
+        )
+    except ValueError as error:
+        raise ValueError(
+            "Baseline backend script phải nằm trong pinned checkout."
+        ) from error
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(config.checkout),
+            "ls-files",
+            "--error-unmatch",
+            backend_relative.as_posix(),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    if not config.backend_script.is_file():
+        raise FileNotFoundError(
+            f"Baseline backend script không tồn tại: "
+            f"{config.backend_script}"
+        )
+    backend_hash = sha256_file(config.backend_script)
     _validate_environment_executable(config)
     artifacts = {
         "checkout_commit": commit,
         "checkpoint_sha256": checkpoint_hash,
+        "adapter_sha256": adapter_hash,
+        "backend_sha256": backend_hash,
         "test_pairs_sha256": sha256_file(config.test_pairs),
     }
     if require_generator_model_config:
@@ -224,14 +282,14 @@ def _write_jsonl(
     temporary.replace(path)
 
 
-def _foreground_crop(image: Image.Image) -> Image.Image:
+def _foreground_crop(image: Image.Image) -> Image.Image | None:
     grayscale = image.convert("L")
     mask = grayscale.point(lambda value: 255 if value < 253 else 0)
     bbox = mask.getbbox()
     mask.close()
     if bbox is None:
         grayscale.close()
-        raise ValueError("Baseline output không có foreground.")
+        return None
     cropped = grayscale.crop(bbox)
     grayscale.close()
     return cropped
@@ -267,15 +325,18 @@ def stitch_word_images(
                     )
                 with Image.open(path) as source:
                     crop = _foreground_crop(source)
-                width = max(
-                    1,
-                    round(crop.width * content_height / crop.height),
-                )
-                resized = crop.resize(
-                    (width, content_height),
-                    Image.Resampling.LANCZOS,
-                )
-                crop.close()
+                if crop is None:
+                    resized = Image.new("L", (1, content_height), 255)
+                else:
+                    width = max(
+                        1,
+                        round(crop.width * content_height / crop.height),
+                    )
+                    resized = crop.resize(
+                        (width, content_height),
+                        Image.Resampling.LANCZOS,
+                    )
+                    crop.close()
                 crops.append(resized)
             available = canvas_width - 2 * margin
             raw_width = sum(image.width for image in crops)
@@ -320,6 +381,8 @@ def normalize_paragraph_output(
         )
     with Image.open(source_path) as source:
         cropped = _foreground_crop(source)
+    if cropped is None:
+        return Image.new("L", (1024, output_height), 255)
     scale = min(1024 / cropped.width, output_height / cropped.height)
     size = (
         max(1, min(1024, round(cropped.width * scale))),
@@ -445,6 +508,8 @@ class ExternalBaselineRunner:
             "{output_dir}": str(external_output.resolve()),
             "{checkpoint}": str(self.config.checkpoint.resolve()),
             "{checkout}": str(self.config.checkout.resolve()),
+            "{adapter}": str(self.config.adapter_script.resolve()),
+            "{backend}": str(self.config.backend_script.resolve()),
         }
         command: list[str] = []
         for item in self.config.command:

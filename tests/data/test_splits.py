@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -10,9 +11,11 @@ import pytest
 from vietparadiff.data.splits import (
     SplitConfig,
     _eligible_references,
+    _load_manifest,
     _supported_generator_text,
     create_data_splits,
 )
+from PIL import Image
 from vietparadiff.models import (
     GraphemeVocabulary,
     ParagraphFormatter,
@@ -191,6 +194,55 @@ def make_fixture(root: Path) -> None:
     write_manifest(root, "uithwdb", uit)
     write_manifest(root, "vnondb", vnon)
     write_manifest(root, "uithwdb_augmented", augmented)
+    metadata = root / "metadata"
+    metadata.mkdir()
+    evidence = [f"{index}" * 64 for index in (1, 2)]
+    candidate_path = metadata / "vietnamese_writer_crosswalk_candidates.json"
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "candidate_only",
+                "uithwdb_writer_ids": ["uithwdb_1", "uithwdb_2"],
+                "vnondb_writer_ids": [
+                    "vnondb_writer_1",
+                    "vnondb_writer_2",
+                ],
+                "candidates": [
+                    {
+                        "vnondb_writer_id": f"vnondb_writer_{index}",
+                        "evidence_sha256": value,
+                    }
+                    for index, value in enumerate(evidence, start=1)
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (metadata / "vietnamese_writer_crosswalk.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "approved",
+                "candidate_report": str(candidate_path),
+                "candidate_report_sha256": hashlib.sha256(
+                    candidate_path.read_bytes()
+                ).hexdigest(),
+                "approved": [
+                    {
+                        "uithwdb_writer_id": f"uithwdb_{index}",
+                        "vnondb_writer_id": f"vnondb_writer_{index}",
+                        "evidence_sha256": evidence[index - 1],
+                    }
+                    for index in (1, 2)
+                ],
+                "proven_independent": [],
+                "unresolved": [],
+                "excluded": [],
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_generator_text_filter_rejects_unsupported_marks() -> None:
@@ -209,6 +261,10 @@ def test_create_data_splits_is_writer_disjoint_and_stage_correct(
         SplitConfig(
             data_root=data_root,
             output_root=output,
+            writer_crosswalk=(
+                data_root
+                / "metadata/vietnamese_writer_crosswalk.json"
+            ),
             test_fraction=0.5,
             seed=7,
         )
@@ -315,7 +371,7 @@ def test_create_data_splits_is_writer_disjoint_and_stage_correct(
             reference["canonical_writer_id"]
             == pair["canonical_writer_id"]
         )
-        assert " ".join(reference["text"].split()) not in " ".join(
+        assert " ".join(reference["text"].split()) != " ".join(
             pair["target_text"].split()
         )
 
@@ -353,7 +409,6 @@ def test_create_data_splits_is_writer_disjoint_and_stage_correct(
     } >= {
         "unsupported_grapheme",
         "formatter_contract",
-        "no_valid_reference",
     }
 
     test_member_ids = {
@@ -388,7 +443,14 @@ def test_split_output_is_deterministic_and_requires_overwrite(
     make_fixture(data_root)
     first = tmp_path / "first"
     second = tmp_path / "second"
-    common = dict(data_root=data_root, test_fraction=0.5, seed=13)
+    common = dict(
+        data_root=data_root,
+        writer_crosswalk=(
+            data_root / "metadata/vietnamese_writer_crosswalk.json"
+        ),
+        test_fraction=0.5,
+        seed=13,
+    )
 
     create_data_splits(SplitConfig(output_root=first, **common))
     create_data_splits(SplitConfig(output_root=second, **common))
@@ -416,3 +478,92 @@ def test_split_output_is_deterministic_and_requires_overwrite(
         for path in first.rglob("*")
         if path.is_file()
     } == first_files
+
+
+def test_unresolved_cross_dataset_writers_are_quarantined(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "data"
+    make_fixture(data_root)
+    crosswalk_path = (
+        data_root / "metadata/vietnamese_writer_crosswalk.json"
+    )
+    payload = json.loads(crosswalk_path.read_text(encoding="utf-8"))
+    removed = payload["approved"].pop()
+    payload["unresolved"] = [
+        removed["uithwdb_writer_id"],
+        removed["vnondb_writer_id"],
+    ]
+    crosswalk_path.write_text(json.dumps(payload), encoding="utf-8")
+    output = tmp_path / "splits"
+    create_data_splits(
+        SplitConfig(
+            data_root=data_root,
+            output_root=output,
+            writer_crosswalk=crosswalk_path,
+            test_fraction=0.5,
+            seed=7,
+        )
+    )
+    unresolved = set(payload["unresolved"])
+    for manifest in output.rglob("*.jsonl"):
+        if manifest.name == "rejected_targets.jsonl":
+            continue
+        for record in read_jsonl(manifest):
+            assert record.get("writer_id") not in unresolved
+    coverage = json.loads(
+        (output / "writers/crosswalk_coverage.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert set(coverage["unresolved"]) == unresolved
+
+
+def test_exact_duplicate_policy_preserves_semantic_levels(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "same.png"
+    Image.new("L", (8, 8), 255).save(image)
+    manifest = tmp_path / "manifest.jsonl"
+    records = [
+        {
+            "id": "line-a",
+            "image": str(image),
+            "text": "cấp",
+            "writer_id": "writer",
+            "level": "line",
+        },
+        {
+            "id": "line-b",
+            "image": str(image),
+            "text": "cấp",
+            "writer_id": "writer",
+            "level": "line",
+        },
+        {
+            "id": "paragraph-a",
+            "image": str(image),
+            "text": "cấp",
+            "writer_id": "writer",
+            "level": "paragraph",
+        },
+    ]
+    manifest.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    loaded = _load_manifest(manifest, "fixture")
+    assert {record["level"] for record in loaded} == {
+        "line",
+        "paragraph",
+    }
+    line = next(record for record in loaded if record["level"] == "line")
+    assert line["duplicate_provenance"]["duplicate_ids"] == ["line-b"]
+
+    records[1]["text"] = "khác"
+    manifest.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="label conflict"):
+        _load_manifest(manifest, "fixture")

@@ -11,6 +11,11 @@ from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
 
+from vietparadiff.data.build_provenance import (
+    BUILDER_CONFIGS,
+    BuildIssues,
+    write_build_report,
+)
 from vietparadiff.data.image_utils import save_normalized_image
 from vietparadiff.cli_logging import get_logger
 
@@ -41,6 +46,7 @@ def build_cvl_dataset() -> None:
         manually added files outside that directory.
     """
     logger.info("Build CVL dataset")
+    issues = BuildIssues()
 
     if OUT.exists():
         logger.warning(f"Removing existing output folder: {OUT}")
@@ -125,6 +131,11 @@ def build_cvl_dataset() -> None:
 
         if page is None:
             logger.warning(f"Page not found: {xml_path.name}")
+            issues.reject(
+                xml_path.stem,
+                "missing_page_annotation",
+                xml_path,
+            )
             continue
 
         page_id = Path(page.attrib.get("imageFilename", "")).stem
@@ -155,6 +166,11 @@ def build_cvl_dataset() -> None:
 
         if handwritten_block is None:
             logger.warning(f"Handwritten block not found: {xml_path.name}")
+            issues.reject(
+                normalized_page_id,
+                "missing_handwritten_block",
+                xml_path,
+            )
             continue
 
         line_regions = [
@@ -194,11 +210,21 @@ def build_cvl_dataset() -> None:
                 text = word_region.attrib.get("text")
 
                 if word_id is None or text is None:
+                    issues.reject(
+                        f"{normalized_line_id}:word",
+                        "missing_word_id_or_text",
+                        xml_path,
+                    )
                     continue
 
                 text = text.strip()
 
                 if not text:
+                    issues.reject(
+                        word_id,
+                        "empty_word_transcript",
+                        xml_path,
+                    )
                     continue
 
                 words.append(text)
@@ -207,6 +233,11 @@ def build_cvl_dataset() -> None:
 
                 if word_source is None:
                     logger.warning(f"Word image not found: {word_id}")
+                    issues.hard(
+                        word_id,
+                        "missing_word_image",
+                        xml_path,
+                    )
                     continue
 
                 normalized_word_id = f"cvl_{word_id.replace('-', '_')}"
@@ -235,6 +266,11 @@ def build_cvl_dataset() -> None:
             line_text = " ".join(words)
 
             if not line_text:
+                issues.reject(
+                    normalized_line_id,
+                    "empty_line_transcript",
+                    xml_path,
+                )
                 continue
 
             paragraph_lines.append(line_text)
@@ -243,6 +279,11 @@ def build_cvl_dataset() -> None:
 
             if line_source is None:
                 logger.warning(f"Line image not found: {line_id}")
+                issues.hard(
+                    normalized_line_id,
+                    "missing_line_image",
+                    xml_path,
+                )
                 continue
 
             output_line = IMAGES / f"{normalized_line_id}.png"
@@ -274,10 +315,20 @@ def build_cvl_dataset() -> None:
 
         if paragraph_source is None:
             logger.warning(f"Paragraph image not found: {page_id}")
+            issues.hard(
+                normalized_page_id,
+                "missing_paragraph_image",
+                xml_path,
+            )
             continue
 
         if not paragraph_text:
             logger.warning(f"Paragraph text is empty: {page_id}")
+            issues.reject(
+                normalized_page_id,
+                "empty_paragraph_transcript",
+                xml_path,
+            )
             continue
 
         output_paragraph = IMAGES / f"{normalized_page_id}.png"
@@ -328,3 +379,14 @@ def build_cvl_dataset() -> None:
     logger.info(f"Words: {word_count}")
     logger.info(f"Total: {len(manifest)}")
     logger.info(f"Manifest: {MANIFEST}")
+    write_build_report(
+        dataset="cvl",
+        raw_root=RAW,
+        manifest=MANIFEST,
+        output=OUT / "build_report.json",
+        builder_config=BUILDER_CONFIGS["cvl"],
+        accepted_count=len(manifest),
+        expected_rejections=issues.expected_rejections,
+        hard_errors=issues.hard_errors,
+        warnings=issues.warnings,
+    )

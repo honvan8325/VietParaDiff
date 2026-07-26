@@ -1,5 +1,6 @@
 seed: 42
 device: auto
+precision: auto
 selection_protocol: writer_disjoint_internal_validation
 
 data:
@@ -20,6 +21,16 @@ optimizer:
   weight_decay: 0.0001
   epochs: 50
   gradient_clip_norm: 1.0
+  warmup_epochs: 2
 
 checkpoint:
   output_dir: outputs/writer_metric
+  save_last: true
+  save_best: true
+
+logging:
+  tensorboard: true
+  wandb: true
+  wandb_project: vietparadiff-writer-metric
+  wandb_entity: null
+  wandb_mode: offline

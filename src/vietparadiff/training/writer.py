@@ -12,12 +12,15 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import torch
+import wandb
 import yaml
 from PIL import Image
 from torch import Tensor, nn
 from torch.nn import functional as F
 from torch.optim import AdamW
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, Dataset, Sampler
+from torch.utils.tensorboard import SummaryWriter
 
 from vietparadiff.artifacts import (
     sha256_file,
@@ -26,6 +29,13 @@ from vietparadiff.artifacts import (
 from vietparadiff.metrics import binary_auc_eer
 from vietparadiff.models.config import WriterEncoderConfig
 from vietparadiff.models.writer import ArcFaceHead, WriterStyleEncoder
+from vietparadiff.runtime import (
+    RuntimePrecision,
+    autocast_context,
+    capture_rng_state,
+    create_grad_scaler,
+    restore_rng_state,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,34 +73,65 @@ class WriterMetricOptimizerConfig:
     weight_decay: float
     epochs: int
     gradient_clip_norm: float
+    warmup_epochs: int
 
     def __post_init__(self) -> None:
         if self.learning_rate <= 0.0 or self.weight_decay < 0.0:
             raise ValueError("Writer optimizer values không hợp lệ.")
-        if self.epochs <= 0 or self.gradient_clip_norm <= 0.0:
+        if (
+            self.epochs <= 0
+            or self.gradient_clip_norm <= 0.0
+            or not 0 <= self.warmup_epochs < self.epochs
+        ):
             raise ValueError("Writer epochs/gradient clip phải dương.")
 
 
 @dataclass(frozen=True, slots=True)
 class WriterMetricCheckpointConfig:
     output_dir: Path
+    save_last: bool
+    save_best: bool
+
+
+@dataclass(frozen=True, slots=True)
+class WriterMetricLoggingConfig:
+    tensorboard: bool
+    wandb: bool
+    wandb_project: str
+    wandb_entity: str | None
+    wandb_mode: str
+
+    def __post_init__(self) -> None:
+        if not self.wandb_project:
+            raise ValueError("Writer W&B project không được rỗng.")
+        if self.wandb_mode not in {"online", "offline", "disabled"}:
+            raise ValueError("Writer wandb_mode không hợp lệ.")
 
 
 @dataclass(frozen=True, slots=True)
 class WriterMetricTrainingConfig:
     seed: int
     device: str
+    precision: str
     selection_protocol: str
     data: WriterMetricDataConfig
     backbone: WriterMetricBackboneConfig
     optimizer: WriterMetricOptimizerConfig
     checkpoint: WriterMetricCheckpointConfig
+    logging: WriterMetricLoggingConfig
 
     def __post_init__(self) -> None:
         if self.seed < 0:
             raise ValueError("seed không được âm.")
         if self.device not in {"auto", "cuda", "mps", "cpu"}:
             raise ValueError("device phải là auto/cuda/mps/cpu.")
+        if self.precision not in {
+            "auto",
+            "float32",
+            "float16",
+            "bfloat16",
+        }:
+            raise ValueError("Writer precision không hợp lệ.")
         if self.selection_protocol != (
             "writer_disjoint_internal_validation"
         ):
@@ -138,11 +179,13 @@ def load_writer_metric_config(
     root = {
         "seed",
         "device",
+        "precision",
         "selection_protocol",
         "data",
         "backbone",
         "optimizer",
         "checkpoint",
+        "logging",
     }
     if not isinstance(raw, Mapping) or set(raw) != root:
         raise ValueError("Writer metric config root sai schema.")
@@ -168,12 +211,29 @@ def load_writer_metric_config(
             "weight_decay",
             "epochs",
             "gradient_clip_norm",
+            "warmup_epochs",
         },
     )
-    checkpoint = _section(raw, "checkpoint", {"output_dir"})
+    checkpoint = _section(
+        raw,
+        "checkpoint",
+        {"output_dir", "save_last", "save_best"},
+    )
+    logging = _section(
+        raw,
+        "logging",
+        {
+            "tensorboard",
+            "wandb",
+            "wandb_project",
+            "wandb_entity",
+            "wandb_mode",
+        },
+    )
     return WriterMetricTrainingConfig(
         seed=int(raw["seed"]),
         device=str(raw["device"]),
+        precision=str(raw["precision"]),
         selection_protocol=str(raw["selection_protocol"]),
         data=WriterMetricDataConfig(
             line_manifest=Path(str(data["line_manifest"])),
@@ -197,9 +257,23 @@ def load_writer_metric_config(
             gradient_clip_norm=float(
                 optimizer["gradient_clip_norm"]
             ),
+            warmup_epochs=int(optimizer["warmup_epochs"]),
         ),
         checkpoint=WriterMetricCheckpointConfig(
-            output_dir=Path(str(checkpoint["output_dir"]))
+            output_dir=Path(str(checkpoint["output_dir"])),
+            save_last=bool(checkpoint["save_last"]),
+            save_best=bool(checkpoint["save_best"]),
+        ),
+        logging=WriterMetricLoggingConfig(
+            tensorboard=bool(logging["tensorboard"]),
+            wandb=bool(logging["wandb"]),
+            wandb_project=str(logging["wandb_project"]),
+            wandb_entity=(
+                None
+                if logging["wandb_entity"] is None
+                else str(logging["wandb_entity"])
+            ),
+            wandb_mode=str(logging["wandb_mode"]),
         ),
     )
 
@@ -602,17 +676,130 @@ def validate_writer_inference_contract(
     return contract
 
 
+class WriterMetricLogger:
+    def __init__(
+        self,
+        config: WriterMetricLoggingConfig,
+        output_dir: Path,
+        resolved_config: Mapping[str, object],
+    ) -> None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        self.writer = (
+            SummaryWriter(output_dir / "tensorboard")
+            if config.tensorboard
+            else None
+        )
+        self.run = (
+            wandb.init(
+                project=config.wandb_project,
+                entity=config.wandb_entity,
+                config=dict(resolved_config),
+                dir=str(output_dir),
+                mode=config.wandb_mode,
+            )
+            if config.wandb
+            else None
+        )
+
+    def log(self, metrics: Mapping[str, float], epoch: int) -> None:
+        if self.writer is not None:
+            for name, value in metrics.items():
+                self.writer.add_scalar(name, value, epoch)
+            self.writer.flush()
+        if self.run is not None:
+            self.run.log(dict(metrics), step=epoch)
+
+    def close(self) -> None:
+        if self.writer is not None:
+            self.writer.close()
+        if self.run is not None:
+            self.run.finish()
+
+
+def _atomic_torch_save(payload: object, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    torch.save(payload, temporary)
+    temporary.replace(path)
+
+
+def _writer_scheduler(
+    optimizer: AdamW,
+    config: WriterMetricOptimizerConfig,
+) -> LambdaLR:
+    def scale(epoch: int) -> float:
+        if config.warmup_epochs and epoch < config.warmup_epochs:
+            return (epoch + 1) / config.warmup_epochs
+        denominator = max(1, config.epochs - config.warmup_epochs)
+        progress = (epoch - config.warmup_epochs) / denominator
+        return 0.5 * (1.0 + math.cos(math.pi * min(1.0, progress)))
+
+    return LambdaLR(optimizer, scale)
+
+
+def _save_writer_last(
+    path: Path,
+    *,
+    model: WriterStyleEncoder,
+    head: ArcFaceHead,
+    optimizer: AdamW,
+    scheduler: LambdaLR,
+    scaler: torch.amp.GradScaler,
+    next_epoch: int,
+    best_eer: float,
+    best_auc: float,
+    train_writers: Sequence[str],
+    validation_writers: Sequence[str],
+    writer_to_id: Mapping[str, int],
+    config: WriterMetricTrainingConfig,
+    artifact_hashes: Mapping[str, str],
+) -> None:
+    _atomic_torch_save(
+        {
+            "model": model.state_dict(),
+            "arcface_head": head.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "scheduler": scheduler.state_dict(),
+            "scaler": scaler.state_dict(),
+            "epoch": next_epoch,
+            "best_eer": best_eer,
+            "best_auc": best_auc,
+            "writer_split": {
+                "train": list(train_writers),
+                "validation": list(validation_writers),
+                "writer_to_id": dict(writer_to_id),
+            },
+            "config": config.resolved_dict(),
+            "artifact_hashes": dict(artifact_hashes),
+            "rng": capture_rng_state(),
+        },
+        path,
+    )
+
+
 def train_writer_metric(
     config: WriterMetricTrainingConfig,
     *,
-    device: torch.device,
+    runtime: RuntimePrecision,
+    resume: Path | None = None,
 ) -> dict[str, float]:
     backbone_hash = verify_visual_backbone(
         config.backbone.contract,
         name="resnet18_imagenet1k_v1",
         checkpoint=config.backbone.checkpoint,
     )
-    del backbone_hash
+    artifact_hashes = {
+        "line_manifest_sha256": sha256_file(
+            config.data.line_manifest
+        ),
+        "paragraph_manifest_sha256": sha256_file(
+            config.data.paragraph_manifest
+        ),
+        "resnet18_checkpoint_sha256": backbone_hash,
+        "visual_backbone_contract_sha256": sha256_file(
+            config.backbone.contract
+        ),
+    }
     records = _read_records(
         (config.data.line_manifest, config.data.paragraph_manifest)
     )
@@ -651,6 +838,11 @@ def train_writer_metric(
         batch_sampler=sampler,
         collate_fn=collate_writer_metric,
         num_workers=config.data.num_workers,
+        pin_memory=runtime.device.type == "cuda",
+        persistent_workers=config.data.num_workers > 0,
+        multiprocessing_context=(
+            "spawn" if config.data.num_workers > 0 else None
+        ),
     )
     validation_loader = DataLoader(
         validation_dataset,
@@ -658,74 +850,173 @@ def train_writer_metric(
         shuffle=False,
         collate_fn=collate_writer_metric,
         num_workers=config.data.num_workers,
+        pin_memory=runtime.device.type == "cuda",
+        persistent_workers=config.data.num_workers > 0,
+        multiprocessing_context=(
+            "spawn" if config.data.num_workers > 0 else None
+        ),
     )
     model = WriterStyleEncoder(
         model_config,
         imagenet_checkpoint=config.backbone.checkpoint,
-    ).to(device)
-    head = ArcFaceHead(256, len(writer_to_id)).to(device)
+    ).to(runtime.device)
+    head = ArcFaceHead(256, len(writer_to_id)).to(runtime.device)
     optimizer = AdamW(
         [*model.parameters(), *head.parameters()],
         lr=config.optimizer.learning_rate,
         weight_decay=config.optimizer.weight_decay,
     )
+    scheduler = _writer_scheduler(optimizer, config.optimizer)
+    scaler = create_grad_scaler(runtime)
     best_eer = math.inf
     best_auc = 0.0
-    for epoch in range(config.optimizer.epochs):
-        sampler.set_epoch(epoch)
-        model.train()
-        head.train()
-        for batch in train_loader:
-            images = batch["images"]
-            labels = batch["labels"]
-            if not isinstance(images, Tensor) or not isinstance(labels, Tensor):
-                raise TypeError("Writer train batch sai tensor contract.")
-            images = images.to(device)
-            labels = labels.to(device)
-            optimizer.zero_grad(set_to_none=True)
-            logits = head(model(images), labels)
-            loss = F.cross_entropy(logits, labels)
-            if not torch.isfinite(loss):
-                raise FloatingPointError("Writer ArcFace loss không hữu hạn.")
-            loss.backward()
-            nn.utils.clip_grad_norm_(
-                [*model.parameters(), *head.parameters()],
-                config.optimizer.gradient_clip_norm,
-                error_if_nonfinite=True,
-            )
-            optimizer.step()
-        model.eval()
-        validation_embeddings: list[Tensor] = []
-        validation_ids: list[str] = []
-        with torch.inference_mode():
-            for batch in validation_loader:
+    start_epoch = 0
+    if resume is not None:
+        payload = torch.load(
+            resume,
+            map_location="cpu",
+            weights_only=False,
+        )
+        required = {
+            "model",
+            "arcface_head",
+            "optimizer",
+            "scheduler",
+            "scaler",
+            "epoch",
+            "best_eer",
+            "best_auc",
+            "writer_split",
+            "config",
+            "artifact_hashes",
+            "rng",
+        }
+        if not isinstance(payload, Mapping) or set(payload) != required:
+            raise ValueError("Writer last.pt sai schema.")
+        if payload["config"] != config.resolved_dict():
+            raise ValueError("Writer resume config mismatch.")
+        if payload["artifact_hashes"] != artifact_hashes:
+            raise ValueError("Writer resume artifact hash mismatch.")
+        expected_split = {
+            "train": list(train_writers),
+            "validation": list(validation_writers),
+            "writer_to_id": dict(writer_to_id),
+        }
+        if payload["writer_split"] != expected_split:
+            raise ValueError("Writer resume split mismatch.")
+        model.load_state_dict(dict(payload["model"]), strict=True)
+        head.load_state_dict(dict(payload["arcface_head"]), strict=True)
+        optimizer.load_state_dict(payload["optimizer"])
+        scheduler.load_state_dict(payload["scheduler"])
+        scaler.load_state_dict(payload["scaler"])
+        start_epoch = int(payload["epoch"])
+        best_eer = float(payload["best_eer"])
+        best_auc = float(payload["best_auc"])
+        restore_rng_state(payload["rng"])
+    logger = WriterMetricLogger(
+        config.logging,
+        config.checkpoint.output_dir,
+        config.resolved_dict(),
+    )
+    try:
+        for epoch in range(start_epoch, config.optimizer.epochs):
+            sampler.set_epoch(epoch)
+            model.train()
+            head.train()
+            loss_sum = 0.0
+            batches = 0
+            for batch in train_loader:
                 images = batch["images"]
-                if not isinstance(images, Tensor):
-                    raise TypeError("Writer validation images phải là Tensor.")
-                validation_embeddings.append(
-                    model(images.to(device)).cpu()
+                labels = batch["labels"]
+                if not isinstance(images, Tensor) or not isinstance(labels, Tensor):
+                    raise TypeError("Writer train batch sai tensor contract.")
+                images = images.to(runtime.device, non_blocking=True)
+                labels = labels.to(runtime.device, non_blocking=True)
+                optimizer.zero_grad(set_to_none=True)
+                with autocast_context(runtime):
+                    logits = head(model(images), labels)
+                    loss = F.cross_entropy(logits.float(), labels)
+                if not torch.isfinite(loss):
+                    raise FloatingPointError(
+                        "Writer ArcFace loss không hữu hạn."
+                    )
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                gradient_norm = nn.utils.clip_grad_norm_(
+                    [*model.parameters(), *head.parameters()],
+                    config.optimizer.gradient_clip_norm,
+                    error_if_nonfinite=True,
                 )
-                validation_ids.extend(batch["writer_ids"])  # type: ignore[arg-type]
-        auc, eer = validation_verification(
-            torch.cat(validation_embeddings),
-            validation_ids,
-        )
-        if eer < best_eer:
-            best_eer = eer
-            best_auc = auc
-            save_writer_artifacts(
-                config.checkpoint.output_dir,
-                model=model,
-                model_config=model_config,
-                writer_to_id=writer_to_id,
-                config=config,
-                validation_auc=auc,
-                validation_eer=eer,
+                scaler.step(optimizer)
+                scaler.update()
+                loss_sum += float(loss.detach().cpu())
+                batches += 1
+            scheduler.step()
+            model.eval()
+            validation_embeddings: list[Tensor] = []
+            validation_ids: list[str] = []
+            with torch.inference_mode():
+                for batch in validation_loader:
+                    images = batch["images"]
+                    if not isinstance(images, Tensor):
+                        raise TypeError(
+                            "Writer validation images phải là Tensor."
+                        )
+                    with autocast_context(runtime):
+                        embeddings = model(
+                            images.to(runtime.device, non_blocking=True)
+                        )
+                    validation_embeddings.append(embeddings.float().cpu())
+                    validation_ids.extend(batch["writer_ids"])  # type: ignore[arg-type]
+            auc, eer = validation_verification(
+                torch.cat(validation_embeddings),
+                validation_ids,
             )
-        print(
-            f"writer epoch={epoch + 1} validation_auc={auc:.6f} "
-            f"validation_eer={eer:.6f}"
-        )
+            improved = eer < best_eer
+            if improved:
+                best_eer = eer
+                best_auc = auc
+                if config.checkpoint.save_best:
+                    save_writer_artifacts(
+                        config.checkpoint.output_dir,
+                        model=model,
+                        model_config=model_config,
+                        writer_to_id=writer_to_id,
+                        config=config,
+                        validation_auc=auc,
+                        validation_eer=eer,
+                    )
+            if config.checkpoint.save_last:
+                _save_writer_last(
+                    config.checkpoint.output_dir / "last.pt",
+                    model=model,
+                    head=head,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    scaler=scaler,
+                    next_epoch=epoch + 1,
+                    best_eer=best_eer,
+                    best_auc=best_auc,
+                    train_writers=train_writers,
+                    validation_writers=validation_writers,
+                    writer_to_id=writer_to_id,
+                    config=config,
+                    artifact_hashes=artifact_hashes,
+                )
+            metrics = {
+                "train/loss": loss_sum / max(1, batches),
+                "train/learning_rate": optimizer.param_groups[0]["lr"],
+                "train/gradient_norm": float(gradient_norm),
+                "validation/auc": auc,
+                "validation/eer": eer,
+            }
+            logger.log(metrics, epoch + 1)
+            print(
+                f"writer epoch={epoch + 1} validation_auc={auc:.6f} "
+                f"validation_eer={eer:.6f} best={improved}"
+            )
+    finally:
+        logger.close()
     return {"validation_auc": best_auc, "validation_eer": best_eer}
 
 

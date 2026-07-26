@@ -106,10 +106,12 @@ def test_preflight_rejects_stale_dataset_audit(tmp_path: Path) -> None:
         image_root=tmp_path,
     )
     report = {
-        "schema_version": 2,
+        "schema_version": 3,
         "split_root": str(split_root),
         "image_root": str(tmp_path),
-        "error_count": 0,
+        "hard_error_count": 0,
+        "expected_rejection_count": 0,
+        "warning_count": 0,
         **snapshot.report_fields(),
     }
     report_path = tmp_path / "audit.json"

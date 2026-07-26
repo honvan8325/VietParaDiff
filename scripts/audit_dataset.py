@@ -59,9 +59,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     print(
         f"Audit complete: manifests={report['manifest_count']} "
         f"images={report['decoded_image_count']} "
-        f"errors={report['error_count']}"
+        f"hard_errors={report['hard_error_count']} "
+        f"rejections={report['expected_rejection_count']} "
+        f"warnings={report['warning_count']}"
     )
-    if int(report["error_count"]) > 0:
+    if int(report["hard_error_count"]) > 0:
         raise SystemExit(1)
 
 

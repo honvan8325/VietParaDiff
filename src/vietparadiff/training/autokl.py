@@ -383,10 +383,11 @@ class AutoKLLosses:
     edge: Tensor
     kl: Tensor
     kl_weight: float
+    edge_weight: float
 
     @property
     def checkpoint_score(self) -> Tensor:
-        return self.reconstruction + 0.1 * self.edge
+        return self.reconstruction + self.edge_weight * self.edge
 
 
 def compute_autokl_losses(
@@ -426,7 +427,14 @@ def compute_autokl_losses(
     values = (total, reconstruction, edge, kl)
     if not all(torch.isfinite(value).all() for value in values):
         raise FloatingPointError("AutoKL loss chứa NaN hoặc Inf.")
-    return AutoKLLosses(total, reconstruction, edge, kl, weight)
+    return AutoKLLosses(
+        total,
+        reconstruction,
+        edge,
+        kl,
+        weight,
+        config.edge_weight,
+    )
 
 
 def create_optimizer_and_scheduler(

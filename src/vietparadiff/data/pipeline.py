@@ -20,6 +20,10 @@ from torch import Tensor
 from torch.utils.data import Dataset, Sampler
 from torchvision.transforms.functional import pil_to_tensor
 
+from vietparadiff.data.contracts import (
+    eligible_reference,
+    excluded_source_line_ids,
+)
 from vietparadiff.models.config import TextEncoderConfig
 from vietparadiff.models.grapheme import (
     FormattedTextBatch,
@@ -529,6 +533,25 @@ class HTRVocabulary:
             ids(self.tone_to_id, [item.tone for item in graphemes]),
         )
 
+    def minimum_input_width(self, text: str) -> int:
+        """Minimum pixel width whose x4-downsampled CTC path is feasible."""
+        heads = self.encode(text)
+
+        def required(target: Tensor) -> int:
+            values = target.tolist()
+            repeats = sum(
+                first == second
+                for first, second in zip(
+                    values[:-1],
+                    values[1:],
+                    strict=True,
+                )
+            )
+            return len(values) + repeats
+
+        required_steps = max(required(target) for target in heads)
+        return max(1, (required_steps - 1) * 4 + 1)
+
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
@@ -688,7 +711,13 @@ class HTRDataset(Dataset[dict[str, object]]):
             raise IndexError(index)
         if index not in self._width_cache:
             processed = self.processor(self._image_path(index))
-            self._width_cache[index] = int(processed["valid_width"])
+            text = unicodedata.normalize(
+                "NFC", str(self.records[index]["text"])
+            )
+            self._width_cache[index] = max(
+                int(processed["valid_width"]),
+                self.vocabulary.minimum_input_width(text),
+            )
         return self._width_cache[index]
 
     def __getitem__(self, index: int) -> dict[str, object]:
@@ -696,10 +725,24 @@ class HTRDataset(Dataset[dict[str, object]]):
         processed = self.processor(self._image_path(index))
         text = unicodedata.normalize("NFC", str(record["text"]))
         raw, base, shape, tone = self.vocabulary.encode(text)
-        valid_width = int(processed["valid_width"])
+        original_width = int(processed["valid_width"])
+        valid_width = max(
+            original_width,
+            self.vocabulary.minimum_input_width(text),
+        )
+        image = processed["image"]
+        if not isinstance(image, Tensor):
+            raise TypeError("HTR processor image phải là Tensor.")
+        if valid_width > original_width:
+            padding = image.new_ones(
+                image.shape[0],
+                image.shape[1],
+                valid_width - original_width,
+            )
+            image = torch.cat((image, padding), dim=2)
         self._width_cache[index] = valid_width
         return {
-            "image": processed["image"],
+            "image": image,
             "valid_width": valid_width,
             "text": text,
             "raw_targets": raw,
@@ -785,31 +828,18 @@ class VietParaDiffDataset(Dataset[dict[str, object]]):
                 grouped[str(reference["canonical_writer_id"])].append(reference)
             self._eligible_references: list[list[dict[str, object]]] = []
             for target in self.records:
-                excluded = set()
-                augmentation = target.get("augmentation")
-                if isinstance(augmentation, dict):
-                    source_ids = augmentation.get("source_line_ids", [])
-                    if (
-                        not isinstance(source_ids, list)
-                        or not source_ids
-                        or not all(
-                            isinstance(source_id, str) and source_id
-                            for source_id in source_ids
-                        )
-                    ):
-                        raise ValueError(
-                            f"source_line_ids lỗi tại target {target['id']}."
-                        )
-                    excluded = set(source_ids)
-                target_text = _flat_text(str(target["text"]))
+                excluded = set(excluded_source_line_ids(target))
                 candidates = [
                     reference
                     for reference in grouped.get(
                         str(target["canonical_writer_id"]),
                         (),
                     )
-                    if str(reference["id"]) not in excluded
-                    and _flat_text(str(reference["text"])) not in target_text
+                    if eligible_reference(
+                        target,
+                        reference,
+                        excluded_reference_ids=excluded,
+                    )
                 ]
                 if not candidates:
                     raise ValueError(

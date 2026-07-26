@@ -129,10 +129,9 @@ uv run python scripts/build_dataset.py uithwdb
 uv run python scripts/build_dataset.py vnondb
 ```
 
-> [!WARNING]
-> A builder deletes its existing `data/<dataset>` directory before writing the
-> replacement. Do not keep manually created or irreplaceable files inside a
-> generated dataset directory.
+The dispatcher builds in a same-filesystem staging directory and replaces
+`data/<dataset>` only after the manifest and build report are complete. Do not
+call a builder function directly when an atomic replacement is required.
 
 Each builder:
 
@@ -143,7 +142,8 @@ Each builder:
 4. Converts accepted images to width-limited 8-bit grayscale PNG files.
 5. Creates dataset-prefixed sample and writer identifiers.
 6. Records each final image's width and height.
-7. Writes `data/<dataset>/manifest.jsonl`.
+7. Writes `data/<dataset>/manifest.jsonl` and a hash-bound
+   `build_report.json`.
 
 Individual builders are also available as Python functions:
 
@@ -241,6 +241,20 @@ Current generated manifests contain:
 
 ## Creating training splits
 
+First generate review evidence for the UIT-HWDB/VNOnDB writer crosswalk:
+
+```bash
+uv run python scripts/prepare_writer_crosswalk.py
+```
+
+This command never approves identities. Review its evidence and create
+`data/metadata/vietnamese_writer_crosswalk.json` with explicit `approved`,
+`proven_independent`, `unresolved`, and `excluded` states. Unresolved writers
+are quarantined and cannot enter a paper split.
+Every `proven_independent` decision must include `evidence_path` and the
+current SHA-256 of that file; a free-form reason or hash-shaped placeholder
+is not accepted.
+
 Build all stage-specific manifests after the five normalized manifests
 (`cvl`, `iam`, `uithwdb`, `vnondb`, and `uithwdb_augmented`) are available:
 
@@ -259,11 +273,11 @@ uv run python scripts/create_splits.py \
   --overwrite
 ```
 
-UIT-HWDB and VNOnDB writers are canonicalized as a single Vietnamese writer
-family using matching paragraph transcripts and handwriting-image signatures.
-Consequently, the same physical writer cannot appear under one dataset in
-train and the other dataset in test. Synthetic UIT-HWDB paragraphs inherit
-their source writer's split and are train-only.
+UIT-HWDB and VNOnDB writers are canonicalized only through the reviewed,
+one-to-one crosswalk. Transcript/image similarity is candidate evidence, not
+an automatic identity decision. The split command fails on incomplete
+coverage and excludes every unresolved writer. Synthetic UIT-HWDB paragraphs
+inherit an approved source writer's split and are train-only.
 
 The command writes:
 
@@ -520,6 +534,14 @@ uv run python scripts/train_writer_metric.py \
   --config configs/writer_metric/train.yaml
 ```
 
+Resume at an epoch boundary with:
+
+```bash
+uv run python scripts/train_writer_metric.py \
+  --config configs/writer_metric/train.yaml \
+  --resume outputs/writer_metric/last.pt
+```
+
 The verifier uses 256-dimensional L2-normalized embeddings and ArcFace
 (`scale=30`, `margin=0.5`). Its train/validation writers are deterministically
 split 90/10 and disjoint. This is an explicitly allowed internal validation
@@ -593,7 +615,9 @@ uv run python scripts/run_baseline.py --config /path/to/baseline.yaml
 The adapters require the exact pinned commits
 `dde2205a70a2c70d1786503d198a795358c80ee4` for One-DM and
 `8a53e91b99c868614f7e615f41bc49c3f73c75b9` for Paragraph LDM, verify the
-external checkpoint hash, and enforce a common JSONL request/output schema.
+external checkpoint and adapter-script hashes, and enforce a common JSONL
+request/output schema. Blank baseline outputs remain white samples and are
+scored as failures rather than aborting evaluation.
 One-DM outputs are explicitly reported as a deterministically stitched
 word-level baseline. Paragraph LDM output is aspect-preserved and white-padded
 to the target bucket.
@@ -608,10 +632,12 @@ three-seed aggregate. Missing external configs, checkout commits, environment
 commands, or checkpoint hashes fail explicitly.
 
 Six template configs are included at those exact paths. Their all-zero
-checkpoint hashes are deliberate invalid placeholders: replace each path and
-SHA-256 with the corresponding trained external artifact before starting the
-paper DAG. Preflight rejects the templates instead of beginning the internal
-runs and failing much later.
+checkpoint hashes are deliberate invalid placeholders. The provenance bridge
+is the hash-bound in-repository
+`tools/baselines/run_pinned_adapter.py`; each `backend_script` must resolve to
+a file tracked by the exact pinned external commit. Replace checkpoint paths,
+hashes, and backend paths with real trained artifacts before starting the
+paper DAG. Preflight rejects incomplete templates before any subprocess.
 
 Dependency resolution is pinned by the tracked `uv.lock`; this work does not
 modify or regenerate it.
@@ -631,11 +657,23 @@ uv run python scripts/audit_dataset.py \
 The audit checks schema, IDs, paths, dimensions, image decode, duplicate
 content, writer/image leakage, formatter acceptance, HTR CTC feasibility,
 target/reference eligibility, and excluded source-line rules. It exits
-nonzero if any invariant fails and retains the concrete error records in the
-JSON report. Audit schema v2 also stores every manifest SHA-256, an image
+nonzero when `hard_error_count` is nonzero and retains concrete issue records
+in the JSON report. Expected build rejections and warnings are reported
+separately and do not hide blocking failures. Audit schema v3 also stores
+every manifest SHA-256, an image
 inventory SHA-256, and a combined dataset snapshot SHA-256. Paper preflight
 recomputes this snapshot without decoding images and rejects a stale report
-when any split manifest or referenced image has changed.
+when any split manifest, referenced image, normalized source manifest, build
+report, writer split, crosswalk, candidate report, or independence evidence
+has changed. Audit also recomputes each raw inventory and verifies builder
+config, Git commit/dirty-patch provenance, issue-list counts, accepted record
+count, and output-manifest hash.
+
+Before an HTR-guided training run begins, the trainer executes one structural
+probe through generator velocity, differentiable AutoKL decode, canonical
+generated-line routing, and frozen HTR CTC. The probe checks finite values,
+CTC feasibility, slot/ink coverage, and gradient ownership only. It does not
+apply an untrained-model CER or image-quality threshold.
 
 ## Validation
 

@@ -9,9 +9,22 @@ from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from PIL import Image
 
+from vietparadiff.data.contracts import (
+    eligible_reference,
+    excluded_source_line_ids,
+    normalize_content,
+)
+from vietparadiff.data.build_provenance import (
+    BUILDER_CONFIGS,
+    builder_config_sha256,
+    git_provenance,
+    raw_inventory_sha256,
+)
+from vietparadiff.data.crosswalk import load_writer_crosswalk
 from vietparadiff.data.pipeline import (
     HTRImageProcessor,
     HTRVocabulary,
@@ -25,6 +38,7 @@ from vietparadiff.models.grapheme import (
 
 @dataclass(frozen=True, slots=True)
 class AuditIssue:
+    severity: Literal["hard_error", "expected_rejection", "warning"]
     code: str
     manifest: str
     record_id: str
@@ -32,6 +46,7 @@ class AuditIssue:
 
     def to_dict(self) -> dict[str, str]:
         return {
+            "severity": self.severity,
             "code": self.code,
             "manifest": self.manifest,
             "record_id": self.record_id,
@@ -42,14 +57,20 @@ class AuditIssue:
 @dataclass(frozen=True, slots=True)
 class DatasetSnapshot:
     manifest_sha256: dict[str, str]
+    provenance_sha256: dict[str, str]
     image_inventory_sha256: str
+    provenance_inventory_sha256: str
     dataset_snapshot_sha256: str
     image_count: int
 
     def report_fields(self) -> dict[str, object]:
         return {
             "manifest_sha256": dict(self.manifest_sha256),
+            "provenance_sha256": dict(self.provenance_sha256),
             "image_inventory_sha256": self.image_inventory_sha256,
+            "provenance_inventory_sha256": (
+                self.provenance_inventory_sha256
+            ),
             "dataset_snapshot_sha256": self.dataset_snapshot_sha256,
             "snapshot_image_count": self.image_count,
         }
@@ -82,7 +103,9 @@ def _digest_entries(entries: Sequence[str]) -> str:
 def _build_snapshot(
     manifest_sha256: Mapping[str, str],
     image_sha256: Mapping[str, str],
+    provenance_sha256: Mapping[str, str] | None = None,
 ) -> DatasetSnapshot:
+    provenance_sha256 = provenance_sha256 or {}
     manifest_entries = [
         f"manifest:{path}:{digest}"
         for path, digest in manifest_sha256.items()
@@ -91,11 +114,19 @@ def _build_snapshot(
         f"image:{path}:{digest}"
         for path, digest in image_sha256.items()
     ]
+    provenance_entries = [
+        f"provenance:{path}:{digest}"
+        for path, digest in provenance_sha256.items()
+    ]
     return DatasetSnapshot(
         manifest_sha256=dict(sorted(manifest_sha256.items())),
+        provenance_sha256=dict(sorted(provenance_sha256.items())),
         image_inventory_sha256=_digest_entries(image_entries),
+        provenance_inventory_sha256=_digest_entries(
+            provenance_entries
+        ),
         dataset_snapshot_sha256=_digest_entries(
-            [*manifest_entries, *image_entries]
+            [*manifest_entries, *image_entries, *provenance_entries]
         ),
         image_count=len(image_sha256),
     )
@@ -140,6 +171,60 @@ def _image_info(path: Path) -> tuple[int, int, str, str]:
         return image.width, image.height, image.mode, digest
 
 
+def _provenance_hashes(split_root: Path) -> dict[str, str]:
+    data_root = split_root.parent
+    provenance_paths: set[Path] = set()
+    for dataset in ("cvl", "iam", "uithwdb", "vnondb"):
+        provenance_paths.add(data_root / dataset / "manifest.jsonl")
+        provenance_paths.add(data_root / dataset / "build_report.json")
+    provenance_paths.update((split_root / "writers").glob("*.json"))
+    coverage_path = split_root / "writers" / "crosswalk_coverage.json"
+    if coverage_path.is_file():
+        try:
+            coverage = json.loads(
+                coverage_path.read_text(encoding="utf-8")
+            )
+            crosswalk_value = coverage.get("crosswalk_path")
+            if isinstance(crosswalk_value, str) and crosswalk_value:
+                crosswalk_path = Path(crosswalk_value)
+                provenance_paths.add(crosswalk_path)
+                if crosswalk_path.is_file():
+                    crosswalk = json.loads(
+                        crosswalk_path.read_text(encoding="utf-8")
+                    )
+                    candidate_value = crosswalk.get("candidate_report")
+                    if (
+                        isinstance(candidate_value, str)
+                        and candidate_value
+                    ):
+                        candidate = Path(candidate_value)
+                        provenance_paths.add(candidate)
+                    for decision in crosswalk.get(
+                        "proven_independent",
+                        [],
+                    ):
+                        if isinstance(decision, Mapping):
+                            evidence_value = decision.get(
+                                "evidence_path"
+                            )
+                            if (
+                                isinstance(evidence_value, str)
+                                and evidence_value
+                            ):
+                                evidence = Path(evidence_value)
+                                provenance_paths.add(evidence)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            # The strict auditor reports the parse failure; retaining only
+            # the coverage file hash still makes freshness deterministic.
+            del error
+    return {
+        _relative_key(path, data_root): (
+            _file_sha256(path) if path.is_file() else "<missing>"
+        )
+        for path in sorted(provenance_paths)
+    }
+
+
 def _ctc_required(ids: Sequence[int]) -> int:
     repeats = sum(
         first == second
@@ -165,6 +250,7 @@ def compute_dataset_snapshot(
         _relative_key(path, split_root): _file_sha256(path)
         for path in manifests
     }
+    provenance_sha256 = _provenance_hashes(split_root)
     image_paths: set[Path] = set()
     for manifest in manifests:
         if manifest.name == "rejected_targets.jsonl":
@@ -182,7 +268,11 @@ def compute_dataset_snapshot(
         )
         for path in sorted(image_paths)
     }
-    return _build_snapshot(manifest_sha256, image_sha256)
+    return _build_snapshot(
+        manifest_sha256,
+        image_sha256,
+        provenance_sha256,
+    )
 
 
 class DatasetAuditor:
@@ -210,9 +300,14 @@ class DatasetAuditor:
         manifest: Path,
         record_id: object,
         detail: str,
+        *,
+        severity: Literal[
+            "hard_error", "expected_rejection", "warning"
+        ] = "hard_error",
     ) -> None:
         self.issues.append(
             AuditIssue(
+                severity,
                 code,
                 str(manifest),
                 str(record_id),
@@ -231,6 +326,9 @@ class DatasetAuditor:
         }
         image_uses: dict[Path, set[str]] = defaultdict(set)
         image_levels: dict[Path, set[str]] = defaultdict(set)
+        image_records: dict[
+            Path, list[tuple[str, str, str, str, str]]
+        ] = defaultdict(list)
         image_expected: dict[Path, list[tuple[Path, str, int | None, int | None]]] = defaultdict(list)
         id_to_writer: dict[str, str] = {}
         record_counts: dict[str, int] = {}
@@ -256,6 +354,23 @@ class DatasetAuditor:
                 record_id = str(
                     record.get("id", record.get("pair_id", f"row_{index}"))
                 )
+                if manifest.name == "rejected_targets.jsonl":
+                    reason = record.get("rejection_reason_code")
+                    if not isinstance(reason, str) or not reason:
+                        self._issue(
+                            "rejection_missing_reason",
+                            manifest,
+                            record_id,
+                            "Expected rejection thiếu reason code.",
+                        )
+                    else:
+                        self._issue(
+                            reason,
+                            manifest,
+                            record_id,
+                            str(record.get("rejection_reason", reason)),
+                            severity="expected_rejection",
+                        )
                 if record_id in seen_ids:
                     self._issue(
                         "duplicate_id",
@@ -298,6 +413,16 @@ class DatasetAuditor:
                             )
                         )
                     )
+                    if field == "image":
+                        image_records[path].append(
+                            (
+                                str(record.get("dataset", "")),
+                                str(record.get("level", "")),
+                                str(record.get("canonical_writer_id", "")),
+                                str(record.get("text", "")),
+                                str(record.get("id", "")),
+                            )
+                        )
                     expected_width = (
                         int(record["width"])
                         if field == "image"
@@ -400,26 +525,61 @@ class DatasetAuditor:
                     ", ".join(sorted(hash_paths[digest])),
                 )
             paths = [Path(value) for value in hash_paths[digest]]
-            duplicate_groups: dict[str, list[str]] = defaultdict(list)
-            for path in paths:
-                for level in image_levels[path]:
-                    duplicate_groups[level].append(str(path))
-            for level, same_level_paths in duplicate_groups.items():
-                if len(same_level_paths) > 1:
+            records = sorted(
+                {
+                    item
+                    for path in paths
+                    for item in image_records[path]
+                }
+            )
+            if len(records) > 1:
+                writers = {item[2] for item in records}
+                texts = {
+                    normalize_content(item[3])
+                    for item in records
+                    if item[3].strip()
+                }
+                levels = {item[1] for item in records}
+                if len(writers) > 1:
                     self._issue(
-                        "duplicate_image_content",
+                        "duplicate_cross_writer",
                         self.split_root,
                         digest,
-                        f"level={level}: "
-                        + ", ".join(sorted(same_level_paths)),
+                        ", ".join(sorted(hash_paths[digest])),
+                    )
+                elif len(texts) > 1:
+                    self._issue(
+                        "duplicate_label_conflict",
+                        self.split_root,
+                        digest,
+                        ", ".join(sorted(texts)),
+                    )
+                elif len(levels) > 1:
+                    self._issue(
+                        "duplicate_cross_level",
+                        self.split_root,
+                        digest,
+                        ", ".join(sorted(levels)),
+                        severity="warning",
+                    )
+                else:
+                    self._issue(
+                        "duplicate_same_identity",
+                        self.split_root,
+                        digest,
+                        ", ".join(sorted(hash_paths[digest])),
+                        severity="warning",
                     )
 
         self._audit_formatter(loaded)
         self._audit_ctc(loaded)
         self._audit_references(loaded, id_to_writer)
+        self._audit_provenance(loaded)
         issue_counts: dict[str, int] = defaultdict(int)
+        severity_counts: dict[str, int] = defaultdict(int)
         for issue in self.issues:
             issue_counts[issue.code] += 1
+            severity_counts[issue.severity] += 1
         image_sha256 = {
             _relative_key(path, self.image_root): (
                 image_results[path][3]
@@ -432,9 +592,13 @@ class DatasetAuditor:
             )
             for path in image_expected
         }
-        snapshot = _build_snapshot(manifest_sha256, image_sha256)
+        snapshot = _build_snapshot(
+            manifest_sha256,
+            image_sha256,
+            _provenance_hashes(self.split_root),
+        )
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "split_root": str(self.split_root),
             "image_root": str(self.image_root),
             "manifest_count": len(manifests),
@@ -443,11 +607,317 @@ class DatasetAuditor:
             "decoded_image_count": len(image_results),
             "train_writer_count": len(writer_sets["train"]),
             "test_writer_count": len(writer_sets["test"]),
-            "error_count": len(self.issues),
+            "hard_error_count": severity_counts["hard_error"],
+            "expected_rejection_count": severity_counts[
+                "expected_rejection"
+            ],
+            "warning_count": severity_counts["warning"],
+            # Compatibility field for older report consumers. It now means
+            # blocking errors only.
+            "error_count": severity_counts["hard_error"],
             "error_counts": dict(sorted(issue_counts.items())),
-            "errors": [issue.to_dict() for issue in self.issues],
+            "issues": [issue.to_dict() for issue in self.issues],
+            "errors": [
+                issue.to_dict()
+                for issue in self.issues
+                if issue.severity == "hard_error"
+            ],
             **snapshot.report_fields(),
         }
+
+    def _audit_provenance(
+        self,
+        loaded: Mapping[Path, Sequence[Mapping[str, object]]],
+    ) -> None:
+        data_root = self.split_root.parent
+        current_git = git_provenance()
+        for dataset in ("cvl", "iam", "uithwdb", "vnondb"):
+            report_path = data_root / dataset / "build_report.json"
+            manifest = data_root / dataset / "manifest.jsonl"
+            if not report_path.is_file():
+                self._issue(
+                    "missing_build_report",
+                    report_path,
+                    dataset,
+                    "Normalized dataset thiếu build_report.json.",
+                )
+                continue
+            try:
+                report = json.loads(report_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                self._issue(
+                    "build_report_read",
+                    report_path,
+                    dataset,
+                    str(error),
+                )
+                continue
+            required = {
+                "schema_version",
+                "dataset",
+                "git",
+                "raw_root",
+                "raw_inventory_sha256",
+                "builder_config",
+                "builder_config_sha256",
+                "accepted_count",
+                "expected_rejection_count",
+                "expected_rejections",
+                "hard_error_count",
+                "hard_errors",
+                "warning_count",
+                "warnings",
+                "output_manifest_sha256",
+            }
+            if not isinstance(report, Mapping) or not required.issubset(
+                report
+            ):
+                self._issue(
+                    "build_report_schema",
+                    report_path,
+                    dataset,
+                    "Build report thiếu provenance fields.",
+                )
+                continue
+            if report["schema_version"] != 2:
+                self._issue(
+                    "build_report_schema",
+                    report_path,
+                    dataset,
+                    f"expected=2, actual={report['schema_version']}.",
+                )
+            if report["dataset"] != dataset:
+                self._issue(
+                    "build_report_dataset",
+                    report_path,
+                    dataset,
+                    f"actual={report['dataset']}.",
+                )
+            expected_config = BUILDER_CONFIGS[dataset]
+            if (
+                report["builder_config"] != expected_config
+                or report["builder_config_sha256"]
+                != builder_config_sha256(expected_config)
+            ):
+                self._issue(
+                    "build_config_contract",
+                    report_path,
+                    dataset,
+                    "Resolved builder config/hash không khớp code hiện tại.",
+                )
+            if report["git"] != current_git:
+                self._issue(
+                    "build_git_provenance",
+                    report_path,
+                    dataset,
+                    "Build report không bind current Git commit/dirty patch.",
+                )
+            raw_root = Path(str(report["raw_root"]))
+            try:
+                current_raw_hash = raw_inventory_sha256(raw_root)
+            except (OSError, ValueError) as error:
+                self._issue(
+                    "build_raw_inventory",
+                    report_path,
+                    dataset,
+                    str(error),
+                )
+            else:
+                if current_raw_hash != report["raw_inventory_sha256"]:
+                    self._issue(
+                        "build_raw_inventory",
+                        report_path,
+                        dataset,
+                        "Raw inventory đã đổi từ lúc build.",
+                    )
+            for count_name, list_name in (
+                ("expected_rejection_count", "expected_rejections"),
+                ("hard_error_count", "hard_errors"),
+                ("warning_count", "warnings"),
+            ):
+                values = report[list_name]
+                if (
+                    not isinstance(values, Sequence)
+                    or isinstance(values, (str, bytes))
+                    or report[count_name] != len(values)
+                ):
+                    self._issue(
+                        "build_report_counts",
+                        report_path,
+                        dataset,
+                        f"{count_name} không khớp {list_name}.",
+                    )
+                    continue
+                for index, issue in enumerate(values):
+                    if (
+                        not isinstance(issue, Mapping)
+                        or not all(
+                            isinstance(issue.get(field), str)
+                            and bool(str(issue[field]).strip())
+                            for field in ("record_id", "reason", "source")
+                        )
+                    ):
+                        self._issue(
+                            "build_issue_provenance",
+                            report_path,
+                            f"{dataset}:{list_name}:{index}",
+                            "Build issue thiếu record_id/reason/source.",
+                        )
+            if manifest.is_file():
+                try:
+                    accepted = len(_records(manifest))
+                except (OSError, ValueError) as error:
+                    self._issue(
+                        "build_manifest_read",
+                        report_path,
+                        dataset,
+                        str(error),
+                    )
+                else:
+                    if report["accepted_count"] != accepted:
+                        self._issue(
+                            "build_accepted_count",
+                            report_path,
+                            dataset,
+                            (
+                                f"report={report['accepted_count']}, "
+                                f"manifest={accepted}."
+                            ),
+                        )
+            if int(report["hard_error_count"]) != 0:
+                self._issue(
+                    "build_hard_errors",
+                    report_path,
+                    dataset,
+                    f"count={report['hard_error_count']}.",
+                )
+            if (
+                not manifest.is_file()
+                or report["output_manifest_sha256"]
+                != _file_sha256(manifest)
+            ):
+                self._issue(
+                    "build_manifest_hash",
+                    report_path,
+                    dataset,
+                    "Build report không bind current normalized manifest.",
+                )
+
+        coverage_path = (
+            self.split_root / "writers" / "crosswalk_coverage.json"
+        )
+        if not coverage_path.is_file():
+            self._issue(
+                "missing_crosswalk_coverage",
+                coverage_path,
+                "-",
+                "Split thiếu crosswalk coverage artifact.",
+            )
+            return
+        try:
+            coverage = json.loads(
+                coverage_path.read_text(encoding="utf-8")
+            )
+            unresolved = set(coverage["unresolved"])
+            excluded = set(coverage["excluded"])
+            crosswalk_path = Path(str(coverage["crosswalk_path"]))
+            if (
+                not crosswalk_path.is_file()
+                or _file_sha256(crosswalk_path)
+                != coverage["crosswalk_sha256"]
+            ):
+                raise ValueError("Crosswalk source hash mismatch.")
+            reviewed = load_writer_crosswalk(crosswalk_path)
+            source_writers: set[str] = set()
+            for dataset in ("uithwdb", "vnondb"):
+                source_manifest = data_root / dataset / "manifest.jsonl"
+                source_writers.update(
+                    str(record["writer_id"])
+                    for record in _records(source_manifest)
+                )
+            reviewed_writers = (
+                reviewed.approved_writer_ids
+                | reviewed.proven_independent
+                | reviewed.unresolved
+                | reviewed.excluded
+            )
+            if source_writers != reviewed_writers:
+                raise ValueError(
+                    "Crosswalk không cover current source writers: "
+                    f"missing={sorted(source_writers-reviewed_writers)}, "
+                    f"unknown={sorted(reviewed_writers-source_writers)}."
+                )
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            self._issue(
+                "crosswalk_coverage_contract",
+                coverage_path,
+                "-",
+                str(error),
+            )
+            return
+        quarantined = unresolved | excluded
+        canonical_by_raw: dict[str, str] = {}
+        for pair in reviewed.approved:
+            members = tuple(
+                sorted(
+                    (
+                        pair.uithwdb_writer_id,
+                        pair.vnondb_writer_id,
+                    )
+                )
+            )
+            canonical = "vn_writer_" + hashlib.sha256(
+                "\n".join(members).encode("utf-8")
+            ).hexdigest()[:12]
+            canonical_by_raw[pair.uithwdb_writer_id] = canonical
+            canonical_by_raw[pair.vnondb_writer_id] = canonical
+        for writer in reviewed.proven_independent:
+            canonical_by_raw[writer] = "vn_writer_" + hashlib.sha256(
+                writer.encode("utf-8")
+            ).hexdigest()[:12]
+        recomputed_uses: dict[str, set[str]] = defaultdict(set)
+        for manifest, records in loaded.items():
+            if manifest.name == "rejected_targets.jsonl":
+                continue
+            for record in records:
+                raw_writer = record.get("writer_id")
+                if isinstance(raw_writer, str) and raw_writer in quarantined:
+                    self._issue(
+                        "unresolved_writer_in_split",
+                        manifest,
+                        record.get("id", record.get("pair_id", "-")),
+                        raw_writer,
+                    )
+                if (
+                    isinstance(raw_writer, str)
+                    and raw_writer in canonical_by_raw
+                ):
+                    expected_canonical = canonical_by_raw[raw_writer]
+                    actual_canonical = record.get(
+                        "canonical_writer_id"
+                    )
+                    if actual_canonical != expected_canonical:
+                        self._issue(
+                            "canonical_writer_mapping",
+                            manifest,
+                            record.get("id", record.get("pair_id", "-")),
+                            (
+                                f"raw={raw_writer}, "
+                                f"expected={expected_canonical}, "
+                                f"actual={actual_canonical}."
+                            ),
+                        )
+                    recomputed_uses[expected_canonical].add(
+                        _split_kind(manifest)
+                    )
+        for canonical, uses in recomputed_uses.items():
+            if uses == {"train", "test"}:
+                self._issue(
+                    "recomputed_writer_leakage",
+                    coverage_path,
+                    canonical,
+                    "Leakage sau khi tự recompute approved canonical mapping.",
+                )
 
     def _formatter(self) -> ParagraphFormatter:
         vocabulary = GraphemeVocabulary.default_vietnamese()
@@ -550,7 +1020,11 @@ class DatasetAuditor:
                 if not path.is_file():
                     continue
                 try:
-                    valid_width = int(processor(path)["valid_width"])
+                    processed_width = int(processor(path)["valid_width"])
+                    valid_width = max(
+                        processed_width,
+                        vocabulary.minimum_input_width(text),
+                    )
                     input_length = (valid_width + 3) // 4
                     heads = vocabulary.encode(text)
                     required = max(
@@ -577,6 +1051,12 @@ class DatasetAuditor:
         id_to_writer: Mapping[str, str],
     ) -> None:
         reference_records: dict[str, list[Mapping[str, object]]] = defaultdict(list)
+        records_by_id: dict[str, Mapping[str, object]] = {}
+        for records in loaded.values():
+            for record in records:
+                sample_id = record.get("id")
+                if isinstance(sample_id, str) and sample_id:
+                    records_by_id[sample_id] = record
         for manifest, records in loaded.items():
             if "references" not in manifest.name:
                 continue
@@ -595,18 +1075,24 @@ class DatasetAuditor:
                 record_id = str(record.get("id", f"row_{index}"))
                 if not isinstance(writer, str):
                     continue
-                raw_source_lines = record.get("source_line_ids", [])
-                excluded = (
-                    {str(value) for value in raw_source_lines}
-                    if isinstance(raw_source_lines, Sequence)
-                    and not isinstance(raw_source_lines, (str, bytes))
-                    else set()
-                )
+                try:
+                    excluded = set(excluded_source_line_ids(record))
+                except ValueError as error:
+                    self._issue(
+                        "reference_source_contract",
+                        manifest,
+                        record_id,
+                        str(error),
+                    )
+                    continue
                 candidates = [
                     candidate
                     for candidate in reference_records.get(writer, [])
-                    if str(candidate.get("id")) not in excluded
-                    and str(candidate.get("id")) != record_id
+                    if eligible_reference(
+                        record,
+                        candidate,
+                        excluded_reference_ids=excluded,
+                    )
                 ]
                 if not candidates:
                     self._issue(
@@ -619,6 +1105,7 @@ class DatasetAuditor:
         if test_pairs in loaded:
             for record in loaded[test_pairs]:
                 writer = str(record["canonical_writer_id"])
+                resolved: dict[str, Mapping[str, object]] = {}
                 for field in ("target_id", "reference_id"):
                     sample_id = str(record[field])
                     actual = id_to_writer.get(sample_id)
@@ -629,6 +1116,39 @@ class DatasetAuditor:
                             record["pair_id"],
                             f"{field} writer={actual}, pair writer={writer}.",
                         )
+                    source = records_by_id.get(sample_id)
+                    if source is None:
+                        self._issue(
+                            "test_pair_missing_record",
+                            test_pairs,
+                            record["pair_id"],
+                            f"Không resolve được {field}={sample_id}.",
+                        )
+                    else:
+                        resolved[field] = source
+                target = resolved.get("target_id")
+                reference = resolved.get("reference_id")
+                if target is not None and (
+                    target.get("level") != "paragraph"
+                    or bool(target.get("synthetic", False))
+                ):
+                    self._issue(
+                        "test_pair_target_contract",
+                        test_pairs,
+                        record["pair_id"],
+                        "Final target phải là real paragraph.",
+                    )
+                if (
+                    target is not None
+                    and reference is not None
+                    and not eligible_reference(target, reference)
+                ):
+                    self._issue(
+                        "test_pair_reference_contract",
+                        test_pairs,
+                        record["pair_id"],
+                        "Final reference không đạt shared eligibility.",
+                    )
 
 
 __all__ = [

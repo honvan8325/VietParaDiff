@@ -101,10 +101,52 @@ def seed_everything(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def capture_rng_state() -> dict[str, object]:
+    """Capture Python/Torch accelerator RNG for epoch-boundary resume."""
+    state: dict[str, object] = {
+        "python": random.getstate(),
+        "torch": torch.get_rng_state(),
+        "cuda": (
+            torch.cuda.get_rng_state_all()
+            if torch.cuda.is_available()
+            else None
+        ),
+        "mps": (
+            torch.mps.get_rng_state()
+            if torch.backends.mps.is_available()
+            else None
+        ),
+    }
+    return state
+
+
+def restore_rng_state(state: object) -> None:
+    """Strictly restore a state created by :func:`capture_rng_state`."""
+    if not isinstance(state, dict) or set(state) != {
+        "python",
+        "torch",
+        "cuda",
+        "mps",
+    }:
+        raise ValueError("RNG checkpoint sai schema.")
+    random.setstate(state["python"])
+    torch.set_rng_state(state["torch"])
+    if state["cuda"] is not None:
+        if not torch.cuda.is_available():
+            raise RuntimeError("Checkpoint CUDA RNG không thể restore trên host này.")
+        torch.cuda.set_rng_state_all(state["cuda"])
+    if state["mps"] is not None:
+        if not torch.backends.mps.is_available():
+            raise RuntimeError("Checkpoint MPS RNG không thể restore trên host này.")
+        torch.mps.set_rng_state(state["mps"])
+
+
 __all__ = [
     "RuntimePrecision",
     "autocast_context",
+    "capture_rng_state",
     "create_grad_scaler",
     "resolve_runtime",
+    "restore_rng_state",
     "seed_everything",
 ]

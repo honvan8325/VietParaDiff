@@ -14,6 +14,19 @@ from vietparadiff.models import (
     WriterStyleEncoder,
 )
 from vietparadiff.training.writer import split_writer_ids
+from vietparadiff.training.writer import (
+    WriterMetricBackboneConfig,
+    WriterMetricCheckpointConfig,
+    WriterMetricDataConfig,
+    WriterMetricLogger,
+    WriterMetricLoggingConfig,
+    WriterMetricOptimizerConfig,
+    WriterMetricTrainingConfig,
+    _save_writer_last,
+    _writer_scheduler,
+)
+from vietparadiff.runtime import RuntimePrecision, create_grad_scaler
+from torch.optim import AdamW
 
 
 def test_arcface_target_margin_matches_formula() -> None:
@@ -100,3 +113,99 @@ def test_writer_encoder_has_finite_gradient_and_strict_roundtrip(
         key: tuple(value.shape)
         for key, value in model.state_dict().items()
     }
+
+
+def test_writer_metric_tensorboard_and_wandb_offline_logging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WANDB_SILENT", "true")
+    logger = WriterMetricLogger(
+        WriterMetricLoggingConfig(
+            tensorboard=True,
+            wandb=True,
+            wandb_project="vietparadiff-writer-test",
+            wandb_entity=None,
+            wandb_mode="offline",
+        ),
+        tmp_path,
+        {"seed": 42},
+    )
+    logger.log({"train/loss": 1.0}, 1)
+    logger.close()
+    assert list((tmp_path / "tensorboard").glob("events.out.tfevents.*"))
+    assert (tmp_path / "wandb").is_dir()
+
+
+def test_writer_last_checkpoint_binds_data_and_backbone_hashes(
+    tmp_path: Path,
+) -> None:
+    config = WriterMetricTrainingConfig(
+        seed=42,
+        device="cpu",
+        precision="float32",
+        selection_protocol="writer_disjoint_internal_validation",
+        data=WriterMetricDataConfig(
+            tmp_path / "lines.jsonl",
+            tmp_path / "paragraphs.jsonl",
+            tmp_path,
+            0,
+            2,
+            2,
+            0.1,
+        ),
+        backbone=WriterMetricBackboneConfig(
+            tmp_path / "resnet.pt",
+            tmp_path / "vision.json",
+        ),
+        optimizer=WriterMetricOptimizerConfig(
+            1e-4,
+            1e-4,
+            2,
+            1.0,
+            0,
+        ),
+        checkpoint=WriterMetricCheckpointConfig(tmp_path, True, True),
+        logging=WriterMetricLoggingConfig(
+            False,
+            False,
+            "test",
+            None,
+            "disabled",
+        ),
+    )
+    model = WriterStyleEncoder(WriterEncoderConfig())
+    head = ArcFaceHead(256, 2)
+    optimizer = AdamW([*model.parameters(), *head.parameters()])
+    scheduler = _writer_scheduler(optimizer, config.optimizer)
+    runtime = RuntimePrecision(
+        torch.device("cpu"),
+        torch.float32,
+        False,
+        False,
+    )
+    hashes = {
+        "line_manifest_sha256": "1" * 64,
+        "paragraph_manifest_sha256": "2" * 64,
+        "resnet18_checkpoint_sha256": "3" * 64,
+        "visual_backbone_contract_sha256": "4" * 64,
+    }
+    checkpoint = tmp_path / "last.pt"
+    _save_writer_last(
+        checkpoint,
+        model=model,
+        head=head,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        scaler=create_grad_scaler(runtime),
+        next_epoch=1,
+        best_eer=0.2,
+        best_auc=0.8,
+        train_writers=("writer-a", "writer-b"),
+        validation_writers=("writer-c",),
+        writer_to_id={"writer-a": 0, "writer-b": 1},
+        config=config,
+        artifact_hashes=hashes,
+    )
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    assert payload["artifact_hashes"] == hashes

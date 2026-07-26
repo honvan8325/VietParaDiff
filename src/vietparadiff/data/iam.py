@@ -10,6 +10,11 @@ from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
 
+from vietparadiff.data.build_provenance import (
+    BUILDER_CONFIGS,
+    BuildIssues,
+    write_build_report,
+)
 from vietparadiff.data.image_utils import save_normalized_image
 from vietparadiff.cli_logging import get_logger
 
@@ -33,7 +38,10 @@ LINE_PADDING = 10
 WORD_PADDING = 4
 
 
-def _parse_forms_metadata(path: Path) -> dict[str, dict]:
+def _parse_forms_metadata(
+    path: Path,
+    issues: BuildIssues | None = None,
+) -> dict[str, dict]:
     """Parse IAM's form-level metadata index.
 
     Each non-comment row has the following fields::
@@ -66,6 +74,13 @@ def _parse_forms_metadata(path: Path) -> dict[str, dict]:
 
         if len(parts) < 8:
             logger.warning(f"Invalid forms.txt row: {line}")
+            if issues is not None:
+                issues.hard(
+                    f"forms.txt:{len(metadata)}",
+                    "invalid_metadata_row",
+                    path,
+                    line,
+                )
             continue
 
         (
@@ -91,6 +106,13 @@ def _parse_forms_metadata(path: Path) -> dict[str, dict]:
             }
         except ValueError:
             logger.warning(f"Invalid numeric metadata: {line}")
+            if issues is not None:
+                issues.hard(
+                    form_id,
+                    "invalid_numeric_metadata",
+                    path,
+                    line,
+                )
 
     return metadata
 
@@ -225,6 +247,7 @@ def build_iam_dataset() -> None:
         ``data/iam`` is deleted before the new dataset is written.
     """
     logger.info("Build IAM dataset")
+    issues = BuildIssues()
 
     required_paths = [
         FORMS,
@@ -249,7 +272,7 @@ def build_iam_dataset() -> None:
 
     xml_files = sorted(XML.glob("*.xml"))
 
-    forms_metadata = _parse_forms_metadata(FORMS_TXT)
+    forms_metadata = _parse_forms_metadata(FORMS_TXT, issues)
 
     manifest = []
 
@@ -271,6 +294,12 @@ def build_iam_dataset() -> None:
             root = ET.parse(xml_path).getroot()
         except ET.ParseError as error:
             logger.warning(f"Cannot parse {xml_path.name}: {error}")
+            issues.hard(
+                xml_path.stem,
+                "invalid_xml",
+                xml_path,
+                str(error),
+            )
             continue
 
         form_id = root.attrib.get("id", xml_path.stem)
@@ -279,6 +308,7 @@ def build_iam_dataset() -> None:
 
         if form_source is None:
             logger.warning(f"Form image not found: {form_id}")
+            issues.hard(form_id, "missing_form_image", xml_path)
             continue
 
         metadata = forms_metadata.get(form_id)
@@ -295,9 +325,16 @@ def build_iam_dataset() -> None:
                     f"Writer mismatch for {form_id}: "
                     f"XML={writer_raw}, forms.txt={metadata_writer}"
                 )
+                issues.hard(
+                    form_id,
+                    "writer_metadata_conflict",
+                    xml_path,
+                    f"xml={writer_raw}, forms.txt={metadata_writer}",
+                )
 
         if writer_raw is None:
             logger.warning(f"Writer ID not found: {form_id}")
+            issues.hard(form_id, "missing_writer_id", xml_path)
             continue
 
         writer_id = f"iam_{writer_raw}"
@@ -308,12 +345,18 @@ def build_iam_dataset() -> None:
 
         if handwritten_part is None:
             logger.warning(f"Handwritten part not found: {form_id}")
+            issues.reject(
+                form_id,
+                "missing_handwritten_part",
+                xml_path,
+            )
             continue
 
         line_elements = list(handwritten_part.findall("./line"))
 
         if not line_elements:
             logger.warning(f"Handwritten lines not found: {form_id}")
+            issues.reject(form_id, "missing_line_annotations", xml_path)
             continue
 
         # Cross-check XML counts against forms.txt. Mismatches are diagnostic:
@@ -365,6 +408,12 @@ def build_iam_dataset() -> None:
                         f"{form_id}: {name} mismatch, "
                         f"XML={actual}, forms.txt={expected}"
                     )
+                    issues.warn(
+                        form_id,
+                        f"{name.replace(' ', '_')}_mismatch",
+                        xml_path,
+                        f"xml={actual}, forms.txt={expected}",
+                    )
 
         # Preserve line breaks when composing paragraph transcripts because
         # they encode the original layout of the handwritten form.
@@ -381,12 +430,14 @@ def build_iam_dataset() -> None:
 
         if not paragraph_text:
             logger.warning(f"Paragraph text is empty: {form_id}")
+            issues.reject(form_id, "empty_paragraph_transcript", xml_path)
             continue
 
         paragraph_bbox = _get_bbox(handwritten_part)
 
         if paragraph_bbox is None:
             logger.warning(f"Paragraph bounding box not found: {form_id}")
+            issues.reject(form_id, "missing_paragraph_bbox", xml_path)
             continue
 
         output_paragraph = IMAGES / f"{normalized_form_id}.png"
@@ -426,12 +477,22 @@ def build_iam_dataset() -> None:
                     line_text = line_element.attrib.get("text", "").strip()
 
                     if line_id is None or not line_text:
+                        issues.reject(
+                            line_id or f"{form_id}:line",
+                            "missing_line_id_or_text",
+                            xml_path,
+                        )
                         continue
 
                     line_bbox = _get_bbox(line_element)
 
                     if line_bbox is None:
                         logger.warning(f"Line bounding box not found: {line_id}")
+                        issues.reject(
+                            line_id,
+                            "missing_line_bbox",
+                            xml_path,
+                        )
                         continue
 
                     normalized_line_id = f"iam_{line_id.replace('-', '_')}"
@@ -463,6 +524,11 @@ def build_iam_dataset() -> None:
                     # but do not emit potentially misaligned word crops.
                     if line_element.attrib.get("segmentation") != "ok":
                         segmentation_error_lines += 1
+                        issues.reject(
+                            line_id,
+                            "unreliable_word_segmentation",
+                            xml_path,
+                        )
                         continue
 
                     for word_element in line_element.findall("./word"):
@@ -473,12 +539,22 @@ def build_iam_dataset() -> None:
                         ).strip()
 
                         if word_id is None or not word_text:
+                            issues.reject(
+                                word_id or f"{line_id}:word",
+                                "missing_word_id_or_text",
+                                xml_path,
+                            )
                             continue
 
                         word_bbox = _get_bbox(word_element)
 
                         if word_bbox is None:
                             logger.warning(f"Word bounding box not found: {word_id}")
+                            issues.reject(
+                                word_id,
+                                "missing_word_bbox",
+                                xml_path,
+                            )
                             continue
 
                         normalized_word_id = f"iam_{word_id.replace('-', '_')}"
@@ -507,6 +583,12 @@ def build_iam_dataset() -> None:
 
         except (OSError, ValueError) as error:
             logger.warning(f"Cannot process form {form_id}: {error}")
+            issues.hard(
+                form_id,
+                "form_decode_or_crop_failure",
+                form_source,
+                str(error),
+            )
 
             # A form is an atomic unit in the manifest. Remove any crops that
             # were written before the failure so no orphaned files remain.
@@ -548,3 +630,14 @@ def build_iam_dataset() -> None:
     logger.info(f"Total: {len(manifest)}")
     logger.info(f"Lines excluded from word level: " f"{segmentation_error_lines}")
     logger.info(f"Manifest: {MANIFEST}")
+    write_build_report(
+        dataset="iam",
+        raw_root=RAW,
+        manifest=MANIFEST,
+        output=OUT / "build_report.json",
+        builder_config=BUILDER_CONFIGS["iam"],
+        accepted_count=len(manifest),
+        expected_rejections=issues.expected_rejections,
+        hard_errors=issues.hard_errors,
+        warnings=issues.warnings,
+    )

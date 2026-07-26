@@ -1,7 +1,7 @@
 [project]
 name = "vietparadiff"
 version = "0.1.0"
-description = "Build unified handwriting manifests from Vietnamese and Latin corpora"
+description = "One-shot Vietnamese paragraph handwriting generation with latent diffusion"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

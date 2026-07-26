@@ -7,9 +7,7 @@ import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
-import torch
-
-from vietparadiff.runtime import seed_everything
+from vietparadiff.runtime import resolve_runtime, seed_everything
 from vietparadiff.training.writer import (
     load_writer_metric_config,
     train_writer_metric,
@@ -27,31 +25,24 @@ def parse_args(
         type=Path,
         default=Path("configs/writer_metric/train.yaml"),
     )
+    parser.add_argument(
+        "--resume",
+        type=Path,
+        default=None,
+        help="Resume strict epoch-boundary state from writer last.pt.",
+    )
     return parser.parse_args(argv)
-
-
-def _device(name: str) -> torch.device:
-    if name == "auto":
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        if torch.backends.mps.is_available():
-            return torch.device("mps")
-        return torch.device("cpu")
-    device = torch.device(name)
-    if name == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("CUDA được yêu cầu nhưng không khả dụng.")
-    if name == "mps" and not torch.backends.mps.is_available():
-        raise RuntimeError("MPS được yêu cầu nhưng không khả dụng.")
-    return device
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = parse_args(argv)
     config = load_writer_metric_config(args.config)
     seed_everything(config.seed)
+    runtime = resolve_runtime(config.device, config.precision)
     metrics = train_writer_metric(
         config,
-        device=_device(config.device),
+        runtime=runtime,
+        resume=args.resume,
     )
     print(
         "Writer metric complete: "

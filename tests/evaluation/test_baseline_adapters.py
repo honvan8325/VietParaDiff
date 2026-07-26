@@ -60,6 +60,24 @@ def test_paragraph_normalization_preserves_aspect_ratio(
     normalized.close()
 
 
+def test_blank_baseline_outputs_remain_scored_failures(
+    tmp_path: Path,
+) -> None:
+    blank = tmp_path / "blank.png"
+    Image.new("L", (80, 40), 255).save(blank)
+    paragraph = normalize_paragraph_output(blank, output_height=384)
+    assert paragraph.size == (1024, 384)
+    assert paragraph.getextrema() == (255, 255)
+    paragraph.close()
+    stitched = stitch_word_images(
+        [[blank]],
+        line_ranges=[(20, 100)],
+        output_height=384,
+    )
+    assert stitched.getextrema() == (255, 255)
+    stitched.close()
+
+
 def test_baseline_config_rejects_unpinned_commit(
     tmp_path: Path,
 ) -> None:
@@ -70,9 +88,12 @@ def test_baseline_config_rejects_unpinned_commit(
             expected_commit="0" * 40,
             checkpoint=tmp_path / "checkpoint.pt",
             checkpoint_sha256="0" * 64,
+            adapter_script=tmp_path / "adapter.py",
+            adapter_sha256="0" * 64,
+            backend_script=tmp_path / "backend.py",
             command=(
                 "python",
-                "worker.py",
+                "{adapter}",
                 "--requests={requests}",
                 "--output={output_dir}",
             ),

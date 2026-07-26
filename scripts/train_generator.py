@@ -386,6 +386,22 @@ def main(argv: Sequence[str] | None = None) -> None:
             f"Checkpoint epoch {start_epoch} vượt configured epochs "
             f"{config.diffusion.epochs}."
         )
+    if config.stage == "htr_guided":
+        try:
+            probe_batch = next(iter(loader))
+        except StopIteration as error:
+            raise ValueError(
+                "HTR-guidance structural probe thiếu training batch."
+            ) from error
+        probe = trainer.run_htr_guidance_structural_probe(probe_batch)
+        print(
+            "HTR guidance structural preflight passed: "
+            f"lines={int(probe['line_count'])}, "
+            f"htr_loss={probe['htr_loss']:.6f}, "
+            f"slot_ink_coverage={probe['slot_ink_coverage']:.6f}, "
+            f"generator_gradients="
+            f"{int(probe['generator_gradient_count'])}"
+        )
 
     try:
         for epoch in range(start_epoch, config.diffusion.epochs):

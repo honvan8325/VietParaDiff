@@ -381,26 +381,32 @@ def test_htr_guided_trainer_backpropagates_only_to_generator(
         output_height=384,
     )
     text_batch = generator_vocabulary.encode_batch([formatted])
+    batch = {
+        "target_images": torch.randn(
+            1, 1, 384, 1024
+        ).clamp(-1, 1),
+        "reference_images": torch.randn(
+            1, 1, 256, 32
+        ).clamp(-1, 1),
+        "reference_valid_mask": torch.ones(
+            1, 1, 256, 32, dtype=torch.bool
+        ),
+        "graphemes": text_batch.graphemes,
+        "canonical_line_slots": text_batch.canonical_line_slots,
+        "target_texts": ["a"],
+        "target_ids": ["sample"],
+        "output_height": 384,
+    }
+    probe = trainer.run_htr_guidance_structural_probe(batch)
+    assert probe["line_count"] == 1.0
+    assert probe["htr_loss"] >= 0.0
+    assert 0.0 <= probe["slot_ink_coverage"] <= 1.0
+    assert probe["generator_gradient_count"] > 0.0
+    assert trainer.global_step == 0
+    autokl.decode_calls = 0
     trainer.global_step = 4
     output = trainer.train_micro_batch(
-        {
-            "target_images": torch.randn(
-                1, 1, 384, 1024
-            ).clamp(-1, 1),
-            "reference_images": torch.randn(
-                1, 1, 256, 32
-            ).clamp(-1, 1),
-            "reference_valid_mask": torch.ones(
-                1, 1, 256, 32, dtype=torch.bool
-            ),
-            "graphemes": text_batch.graphemes,
-            "canonical_line_slots": (
-                text_batch.canonical_line_slots
-            ),
-            "target_texts": ["a"],
-            "target_ids": ["sample"],
-            "output_height": 384,
-        },
+        batch,
         timesteps=torch.tensor([100], dtype=torch.long),
         noise=torch.zeros(1, 4, 48, 128),
     )

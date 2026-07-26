@@ -15,6 +15,15 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
+from vietparadiff.data.contracts import (
+    eligible_reference,
+    excluded_source_line_ids,
+)
+from vietparadiff.data.crosswalk import (
+    WriterCoverage,
+    evidence_digest,
+    load_writer_crosswalk,
+)
 from vietparadiff.models.config import TextEncoderConfig
 from vietparadiff.models.grapheme import (
     SHAPE_MARKS,
@@ -24,12 +33,24 @@ from vietparadiff.models.grapheme import (
     VietnameseGraphemeFactorizer,
 )
 
-__all__ = ["SplitConfig", "create_data_splits"]
+__all__ = [
+    "SplitConfig",
+    "create_data_splits",
+    "generate_writer_crosswalk_candidates",
+]
 
 
 REAL_DATASETS = ("cvl", "iam", "uithwdb", "vnondb")
 ALL_DATASETS = REAL_DATASETS + ("uithwdb_augmented",)
 VIETNAMESE_DATASETS = ("uithwdb", "vnondb")
+
+
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        while chunk := file.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +59,9 @@ class SplitConfig:
 
     data_root: Path = Path("data")
     output_root: Path = Path("data/splits")
+    writer_crosswalk: Path = Path(
+        "data/metadata/vietnamese_writer_crosswalk.json"
+    )
     test_fraction: float = 0.2
     seed: int = 42
     overwrite: bool = False
@@ -47,6 +71,8 @@ class SplitConfig:
             raise TypeError("data_root phải là pathlib.Path.")
         if not isinstance(self.output_root, Path):
             raise TypeError("output_root phải là pathlib.Path.")
+        if not isinstance(self.writer_crosswalk, Path):
+            raise TypeError("writer_crosswalk phải là pathlib.Path.")
         if not 0.0 < self.test_fraction < 1.0:
             raise ValueError("test_fraction phải nằm trong (0, 1).")
         if not isinstance(self.seed, int):
@@ -90,7 +116,50 @@ def _load_manifest(path: Path, dataset: str) -> list[dict[str, object]]:
             enriched = dict(record)
             enriched["dataset"] = dataset
             records.append(enriched)
-    return records
+    by_digest_level: dict[tuple[str, str], list[dict[str, object]]] = (
+        defaultdict(list)
+    )
+    without_file: list[dict[str, object]] = []
+    for record in records:
+        image = Path(str(record["image"]))
+        if not image.is_file():
+            without_file.append(record)
+            continue
+        digest = _sha256_path(image)
+        by_digest_level[(digest, str(record["level"]))].append(record)
+    canonical: list[dict[str, object]] = list(without_file)
+    for (digest, level), group in sorted(by_digest_level.items()):
+        identities = {
+            (
+                str(record["writer_id"]),
+                _flat_text(str(record["text"])),
+            )
+            for record in group
+        }
+        if len(identities) > 1:
+            writers = {identity[0] for identity in identities}
+            code = (
+                "cross-writer metadata conflict"
+                if len(writers) > 1
+                else "label conflict"
+            )
+            raise ValueError(
+                f"Exact duplicate {code} trong {dataset}/{level}: "
+                f"sha256={digest}, ids="
+                f"{sorted(str(record['id']) for record in group)}."
+            )
+        ordered = sorted(group, key=lambda record: str(record["id"]))
+        kept = dict(ordered[0])
+        if len(ordered) > 1:
+            kept["duplicate_provenance"] = {
+                "image_sha256": digest,
+                "canonical_id": str(kept["id"]),
+                "duplicate_ids": [
+                    str(record["id"]) for record in ordered[1:]
+                ],
+            }
+        canonical.append(kept)
+    return sorted(canonical, key=lambda record: str(record["id"]))
 
 
 def _flat_text(text: str) -> str:
@@ -142,46 +211,24 @@ def _paragraphs_by_writer(
     return dict(grouped)
 
 
-def _match_vietnamese_writers(
+def _candidate_vietnamese_writers(
     uithwdb: Sequence[dict[str, object]],
     vnondb: Sequence[dict[str, object]],
-) -> dict[str, str]:
-    """Map every VNOnDB writer to the matching UIT-HWDB writer signature."""
+) -> list[dict[str, object]]:
+    """Produce review evidence without making an identity decision."""
     uit = _paragraphs_by_writer(uithwdb)
     vnon = _paragraphs_by_writer(vnondb)
     if not uit or not vnon:
         raise ValueError("UIT-HWDB và VNOnDB phải có paragraph records.")
 
-    uit_signatures: dict[tuple[str, ...], list[str]] = defaultdict(list)
-    vnon_signatures: dict[tuple[str, ...], list[str]] = defaultdict(list)
-    for writer_id, records in uit.items():
-        uit_signatures[
-            tuple(sorted(str(record["text"]) for record in records))
-        ].append(writer_id)
-    for writer_id, records in vnon.items():
-        vnon_signatures[
-            tuple(sorted(str(record["text"]) for record in records))
-        ].append(writer_id)
-
-    matches: dict[str, str] = {}
-    used_uit: set[str] = set()
-    for signature, vnon_writers in vnon_signatures.items():
-        uit_writers = uit_signatures.get(signature, ())
-        if len(vnon_writers) == 1 and len(uit_writers) == 1:
-            matches[vnon_writers[0]] = uit_writers[0]
-            used_uit.add(uit_writers[0])
-
-    remaining_vnon = sorted(set(vnon) - matches.keys())
-    remaining_uit = sorted(set(uit) - used_uit)
-    proposed: dict[str, str] = {}
-
-    for vnon_writer in remaining_vnon:
+    candidates: list[dict[str, object]] = []
+    for vnon_writer in sorted(vnon):
         vnon_by_text = {
             _flat_text(str(record["text"])): record
             for record in vnon[vnon_writer]
         }
         scores: list[tuple[int, float, str, int]] = []
-        for uit_writer in remaining_uit:
+        for uit_writer in sorted(uit):
             uit_by_text = {
                 _flat_text(str(record["text"])): record
                 for record in uit[uit_writer]
@@ -204,45 +251,54 @@ def _match_vietnamese_writers(
                     len(uit_by_text),
                 )
             )
-        if not scores:
-            raise RuntimeError(
-                f"Không tìm được UIT-HWDB candidate cho {vnon_writer}."
-            )
         scores.sort()
-        shared_count = -scores[0][0]
-        matched_uit_count = scores[0][3]
-        if shared_count != min(len(vnon_by_text), matched_uit_count):
-            raise RuntimeError(
-                f"Writer signature không bao phủ trọn corpus nhỏ hơn cho "
-                f"{vnon_writer}: matched {shared_count}/"
-                f"min({len(vnon_by_text)}, {matched_uit_count}) paragraphs."
-            )
-        proposed[vnon_writer] = scores[0][2]
+        ranked = [
+            {
+                "uithwdb_writer_id": score[2],
+                "shared_paragraph_count": -score[0],
+                "visual_distance": score[1],
+                "uithwdb_paragraph_count": score[3],
+            }
+            for score in scores
+        ]
+        payload: dict[str, object] = {
+            "vnondb_writer_id": vnon_writer,
+            "vnondb_paragraph_count": len(vnon_by_text),
+            "ranked_candidates": ranked,
+        }
+        payload["evidence_sha256"] = evidence_digest(payload)
+        candidates.append(payload)
+    return candidates
 
-    duplicate_targets = {
-        uit_writer
-        for uit_writer in proposed.values()
-        if sum(
-            candidate == uit_writer
-            for candidate in proposed.values()
-        )
-        > 1
+
+def generate_writer_crosswalk_candidates(
+    data_root: Path,
+) -> dict[str, object]:
+    """Generate deterministic evidence that still requires human approval."""
+    uit = _load_manifest(
+        data_root / "uithwdb" / "manifest.jsonl",
+        "uithwdb",
+    )
+    vnon = _load_manifest(
+        data_root / "vnondb" / "manifest.jsonl",
+        "vnondb",
+    )
+    return {
+        "schema_version": 1,
+        "status": "candidate_only",
+        "uithwdb_writer_ids": sorted(
+            {str(record["writer_id"]) for record in uit}
+        ),
+        "vnondb_writer_ids": sorted(
+            {str(record["writer_id"]) for record in vnon}
+        ),
+        "candidates": _candidate_vietnamese_writers(uit, vnon),
     }
-    if duplicate_targets:
-        raise RuntimeError(
-            "Writer signature mapping không one-to-one: "
-            f"{sorted(duplicate_targets)}"
-        )
-    matches.update(proposed)
-    if set(matches) != set(vnon):
-        raise RuntimeError(
-            f"Chỉ map được {len(matches)}/{len(vnon)} VNOnDB writers."
-        )
-    return matches
 
 
 def _canonical_writer_map(
     manifests: Mapping[str, Sequence[dict[str, object]]],
+    coverage: WriterCoverage,
 ) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
     mapping: dict[str, str] = {}
     families: dict[str, tuple[str, ...]] = {}
@@ -255,12 +311,39 @@ def _canonical_writer_map(
             mapping[writer_id] = writer_id
             families[writer_id] = (writer_id,)
 
-    vietnamese_match = _match_vietnamese_writers(
-        manifests["uithwdb"],
-        manifests["vnondb"],
+    all_uit = {
+        str(record["writer_id"]) for record in manifests["uithwdb"]
+    }
+    all_vnon = {
+        str(record["writer_id"]) for record in manifests["vnondb"]
+    }
+    all_vietnamese = all_uit | all_vnon
+    covered = (
+        coverage.approved_writer_ids
+        | coverage.proven_independent
+        | coverage.unresolved
+        | coverage.excluded
     )
-    paired_uit = set(vietnamese_match.values())
-    for vnon_writer, uit_writer in sorted(vietnamese_match.items()):
+    if covered != all_vietnamese:
+        raise ValueError(
+            "Crosswalk coverage không khớp source writers: "
+            f"missing={sorted(all_vietnamese - covered)}, "
+            f"unknown={sorted(covered - all_vietnamese)}."
+        )
+    for pair in sorted(
+        coverage.approved,
+        key=lambda item: (
+            item.uithwdb_writer_id,
+            item.vnondb_writer_id,
+        ),
+    ):
+        uit_writer = pair.uithwdb_writer_id
+        vnon_writer = pair.vnondb_writer_id
+        if uit_writer not in all_uit or vnon_writer not in all_vnon:
+            raise ValueError(
+                "Approved crosswalk pair không thuộc đúng source dataset: "
+                f"{uit_writer}, {vnon_writer}."
+            )
         members = tuple(sorted((uit_writer, vnon_writer)))
         digest = hashlib.sha256("\n".join(members).encode()).hexdigest()[:12]
         canonical_id = f"vn_writer_{digest}"
@@ -270,26 +353,27 @@ def _canonical_writer_map(
         mapping[uit_writer] = canonical_id
         mapping[vnon_writer] = canonical_id
 
-    all_uit = {
-        str(record["writer_id"]) for record in manifests["uithwdb"]
-    }
-    for uit_writer in sorted(all_uit - paired_uit):
-        digest = hashlib.sha256(uit_writer.encode()).hexdigest()[:12]
+    for writer in sorted(coverage.proven_independent):
+        if writer not in all_vietnamese:
+            raise ValueError(f"Unknown proven-independent writer: {writer}.")
+        digest = hashlib.sha256(writer.encode()).hexdigest()[:12]
         canonical_id = f"vn_writer_{digest}"
         if canonical_id in families:
             raise RuntimeError(f"Canonical writer collision: {canonical_id}")
-        families[canonical_id] = (uit_writer,)
-        mapping[uit_writer] = canonical_id
+        families[canonical_id] = (writer,)
+        mapping[writer] = canonical_id
 
     augmented_writers = {
         str(record["writer_id"])
         for record in manifests["uithwdb_augmented"]
     }
-    missing_augmented = augmented_writers - mapping.keys()
-    if missing_augmented:
+    # Synthetic records from unresolved/excluded writers are intentionally
+    # quarantined when stage records are filtered.
+    unknown_augmented = augmented_writers - all_uit
+    if unknown_augmented:
         raise RuntimeError(
-            "Synthetic writer không có real writer family: "
-            f"{sorted(missing_augmented)}"
+            "Synthetic writer không tồn tại trong UIT-HWDB: "
+            f"{sorted(unknown_augmented)}"
         )
     return mapping, families
 
@@ -364,11 +448,11 @@ def _supported_generator_text(text: str) -> bool:
 def _with_canonical_writer(
     record: Mapping[str, object],
     writer_map: Mapping[str, str],
-) -> dict[str, object]:
+) -> dict[str, object] | None:
     writer_id = str(record["writer_id"])
     canonical_id = writer_map.get(writer_id)
     if canonical_id is None:
-        raise RuntimeError(f"Writer chưa được canonicalize: {writer_id}")
+        return None
     output = dict(record)
     output["canonical_writer_id"] = canonical_id
     return output
@@ -388,6 +472,8 @@ def _filter_records(
             if record["level"] != level:
                 continue
             enriched = _with_canonical_writer(record, writer_map)
+            if enriched is None:
+                continue
             if enriched["canonical_writer_id"] in writers:
                 output.append(enriched)
     return sorted(output, key=lambda record: str(record["id"]))
@@ -447,15 +533,15 @@ def _eligible_references(
     *,
     excluded_reference_ids: set[str] | None = None,
 ) -> list[dict[str, object]]:
-    target_text = _flat_text(str(target["text"]))
-    canonical_id = str(target["canonical_writer_id"])
     excluded = excluded_reference_ids or set()
     return [
         reference
         for reference in references
-        if reference["canonical_writer_id"] == canonical_id
-        and str(reference["id"]) not in excluded
-        and _flat_text(str(reference["text"])) not in target_text
+        if eligible_reference(
+            target,
+            reference,
+            excluded_reference_ids=excluded,
+        )
     ]
 
 
@@ -541,21 +627,9 @@ def _partition_generator_targets(
             )
             continue
 
-        excluded_reference_ids: set[str] = set()
-        if synthetic:
-            augmentation = target["augmentation"]
-            if not isinstance(augmentation, dict):
-                raise TypeError(
-                    f"Synthetic target {target['id']} có augmentation lỗi."
-                )
-            source_line_ids = augmentation["source_line_ids"]
-            if not isinstance(source_line_ids, list):
-                raise TypeError(
-                    f"Synthetic target {target['id']} có source_line_ids lỗi."
-                )
-            excluded_reference_ids = {
-                str(source_id) for source_id in source_line_ids
-            }
+        excluded_reference_ids = (
+            set(excluded_source_line_ids(target)) if synthetic else set()
+        )
 
         canonical_id = str(target["canonical_writer_id"])
         eligible = _eligible_references(
@@ -925,7 +999,8 @@ def create_data_splits(
         )
         for dataset in ALL_DATASETS
     }
-    writer_map, families = _canonical_writer_map(manifests)
+    coverage = load_writer_crosswalk(config.writer_crosswalk)
+    writer_map, families = _canonical_writer_map(manifests, coverage)
     train_writers, test_writers = _writer_splits(
         families,
         config.test_fraction,
@@ -939,6 +1014,23 @@ def create_data_splits(
         test_writers,
         config,
     )
+    writer_files["writers/crosswalk_coverage.json"] = {
+        "schema_version": 1,
+        "crosswalk_path": str(config.writer_crosswalk.resolve()),
+        "crosswalk_sha256": coverage.artifact_sha256,
+        "candidate_report_sha256": coverage.candidate_report_sha256,
+        "approved": [
+            {
+                "uithwdb_writer_id": pair.uithwdb_writer_id,
+                "vnondb_writer_id": pair.vnondb_writer_id,
+                "evidence_sha256": pair.evidence_sha256,
+            }
+            for pair in coverage.approved
+        ],
+        "proven_independent": sorted(coverage.proven_independent),
+        "unresolved": sorted(coverage.unresolved),
+        "excluded": sorted(coverage.excluded),
+    }
     _write_outputs(
         config.output_root,
         writer_files,
@@ -951,4 +1043,7 @@ def create_data_splits(
     }
     counts["writers/train.json"] = len(train_writers)
     counts["writers/test.json"] = len(test_writers)
+    counts["writers/quarantined"] = len(
+        coverage.unresolved | coverage.excluded
+    )
     return counts

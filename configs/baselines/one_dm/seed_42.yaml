@@ -3,9 +3,14 @@ checkout: external/One-DM
 expected_commit: dde2205a70a2c70d1786503d198a795358c80ee4
 checkpoint: external/One-DM/outputs/vietnamese_seed_42/best.pt
 checkpoint_sha256: 0000000000000000000000000000000000000000000000000000000000000000
+adapter_script: tools/baselines/run_pinned_adapter.py
+adapter_sha256: 4431ac42ba7d34a099734a27bfe8c1084d7e6ba2139aecacbb71654d0080dbcb
+backend_script: external/One-DM/vietparadiff_adapter.py
 command:
 - .venv/bin/python
-- vietparadiff_adapter.py
+- '{adapter}'
+- --checkout={checkout}
+- --backend-script={backend}
 - --requests={requests}
 - --output-dir={output_dir}
 - --checkpoint={checkpoint}

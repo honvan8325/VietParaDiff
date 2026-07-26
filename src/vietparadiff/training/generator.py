@@ -1784,6 +1784,135 @@ class VietParaDiffTrainer:
         self.global_step += 1
         return float(gradient_norm.detach().cpu())
 
+    def run_htr_guidance_structural_probe(
+        self,
+        batch: Mapping[str, object],
+    ) -> dict[str, float]:
+        """Validate the differentiable guidance graph without optimizing.
+
+        This is deliberately a structural gate: it checks shape, finite CTC,
+        slots, ink coverage, and gradients. It never imposes a CER or visual
+        quality threshold on an untrained generator.
+        """
+        if self.htr_teacher is None or self.config.guidance is None:
+            raise RuntimeError(
+                "Structural HTR probe chỉ hợp lệ cho htr_guided stage."
+            )
+        target_images = batch.get("target_images")
+        slots = batch.get("canonical_line_slots")
+        if not isinstance(target_images, Tensor) or not isinstance(
+            slots, Tensor
+        ):
+            raise TypeError(
+                "Structural HTR probe cần target_images và "
+                "canonical_line_slots Tensor."
+            )
+        if target_images.shape[0] <= 0:
+            raise ValueError("Structural HTR probe batch không được rỗng.")
+        ink = ((1.0 - target_images.float()) / 2.0).clamp(0.0, 1.0)
+        if not torch.isfinite(ink).all() or float(ink.sum()) <= 0.0:
+            raise ValueError(
+                "Structural HTR probe fixture phải có foreground hữu hạn."
+            )
+        slot_union = slots.float().sum(dim=1, keepdim=True).clamp(0.0, 1.0)
+        slot_union = F.interpolate(
+            slot_union,
+            size=target_images.shape[-2:],
+            mode="nearest",
+        )
+        slot_ink_coverage = float(
+            ((ink * slot_union).sum() / ink.sum()).detach()
+        )
+        if (
+            not math.isfinite(slot_ink_coverage)
+            or not 0.0 <= slot_ink_coverage <= 1.0
+        ):
+            raise ValueError("Structural HTR slot/ink coverage sai.")
+
+        old_step = self.global_step
+        probe_step = (
+            math.ceil(
+                self.config.guidance.warmup_steps
+                / self.config.guidance.every_n_optimizer_steps
+            )
+            * self.config.guidance.every_n_optimizer_steps
+        )
+        cpu_rng = torch.get_rng_state()
+        cuda_rng = (
+            torch.cuda.get_rng_state_all()
+            if torch.cuda.is_available()
+            else None
+        )
+        self.optimizer.zero_grad(set_to_none=True)
+        try:
+            self.global_step = probe_step
+            batch_size = target_images.shape[0]
+            latent_shape = (
+                batch_size,
+                4,
+                target_images.shape[-2] // 8,
+                128,
+            )
+            output = self.train_micro_batch(
+                batch,
+                timesteps=torch.zeros(
+                    batch_size,
+                    dtype=torch.long,
+                    device=self.runtime.device,
+                ),
+                noise=torch.zeros(
+                    latent_shape,
+                    dtype=target_images.dtype,
+                    device=self.runtime.device,
+                ),
+            )
+            if output.htr_result is None:
+                raise RuntimeError(
+                    "Structural probe không đi qua HTR guidance branch."
+                )
+            trainable_gradients = [
+                parameter.grad
+                for parameter in self.model.parameters()
+                if parameter.requires_grad and parameter.grad is not None
+            ]
+            if not trainable_gradients or not all(
+                torch.isfinite(gradient).all()
+                for gradient in trainable_gradients
+            ):
+                raise FloatingPointError(
+                    "Structural probe không tạo generator gradient hữu hạn."
+                )
+            if any(
+                parameter.grad is not None
+                for parameter in self.autokl.parameters()
+            ):
+                raise RuntimeError(
+                    "Structural probe làm frozen AutoKL nhận gradient."
+                )
+            if any(
+                parameter.grad is not None
+                for parameter in self.htr_teacher.parameters()
+            ):
+                raise RuntimeError(
+                    "Structural probe làm frozen HTR nhận gradient."
+                )
+            return {
+                "line_count": float(output.htr_result.line_count),
+                "htr_loss": float(
+                    output.htr_result.losses.total.detach().cpu()
+                ),
+                "slot_ink_coverage": slot_ink_coverage,
+                "generator_gradient_count": float(
+                    len(trainable_gradients)
+                ),
+            }
+        finally:
+            self.optimizer.zero_grad(set_to_none=True)
+            self.global_step = old_step
+            torch.set_rng_state(cpu_rng)
+            if cuda_rng is not None:
+                torch.cuda.set_rng_state_all(cuda_rng)
+
     def train_epoch(
         self,
         loader: Iterable[Mapping[str, object]],
