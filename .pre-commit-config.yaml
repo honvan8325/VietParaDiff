@@ -1,9 +1,17 @@
 repos:
   - repo: local
     hooks:
+      - id: stage-sample-images
+        name: Stage deterministic sample images
+        entry: bash tools/precommit/stage_sample_images.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages:
+          - pre-commit
       - id: generate-llms
         name: Generate and stage llms.txt
-        entry: bash scripts/generate_llms.sh
+        entry: bash tools/precommit/generate_llms.sh
         language: system
         pass_filenames: false
         always_run: true
