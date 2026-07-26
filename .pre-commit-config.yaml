@@ -1,0 +1,11 @@
+repos:
+  - repo: local
+    hooks:
+      - id: generate-llms
+        name: Generate and stage llms.txt
+        entry: bash scripts/generate_llms.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages:
+          - pre-commit

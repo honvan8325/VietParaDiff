@@ -113,6 +113,7 @@ class ParagraphFormatter:
         word_gap_scale: float = 1.0,
         line_gap_scale: float = 1.0,
         preserve_physical_lines: bool = False,
+        output_height: int | None = None,
     ) -> FormattedParagraph:
         if not isinstance(preserve_physical_lines, bool):
             raise TypeError("preserve_physical_lines phải là bool.")
@@ -212,14 +213,32 @@ class ParagraphFormatter:
             )
         line_height, line_gap = 112, round(24 * line_gap_scale)
         required_height = 96 + len(lines) * line_height + max(0, len(lines) - 1) * line_gap
-        for bucket_id, output_height in enumerate(self.config.height_buckets):
-            if output_height >= required_height:
-                break
+        if output_height is not None:
+            if output_height not in self.config.height_buckets:
+                raise ValueError(
+                    "output_height phải thuộc height_buckets, nhận "
+                    f"{output_height}."
+                )
+            if output_height < required_height:
+                raise ValueError(
+                    f"output_height={output_height} không đủ required_height="
+                    f"{required_height}."
+                )
+            bucket_id = self.config.height_buckets.index(output_height)
         else:
-            raise ValueError(
-                f"Paragraph cần {required_height}px, vượt bucket "
-                f"{self.config.height_buckets[-1]}px."
-            )
+            for bucket_id, selected_height in enumerate(
+                self.config.height_buckets
+            ):
+                if selected_height >= required_height:
+                    output_height = selected_height
+                    break
+            else:
+                raise ValueError(
+                    f"Paragraph cần {required_height}px, vượt bucket "
+                    f"{self.config.height_buckets[-1]}px."
+                )
+        if output_height is None:
+            raise RuntimeError("Không chọn được output height bucket.")
 
         flattened: list[FactorizedGrapheme] = []
         line_ids: list[int] = []
@@ -283,7 +302,7 @@ class GraphemeBatch:
 @dataclass(frozen=True, slots=True)
 class FormattedTextBatch:
     graphemes: GraphemeBatch
-    line_slot_masks: Tensor
+    canonical_line_slots: Tensor
     output_height: int
 
 

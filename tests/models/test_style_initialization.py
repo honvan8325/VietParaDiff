@@ -50,6 +50,7 @@ def test_top_level_input_requires_precomputed_style_condition() -> None:
     assert "style_condition" in names
     assert "reference_images" not in names
     assert "reference_valid_mask" not in names
+    assert "line_slot_masks" not in names
+    assert "canonical_line_slots" not in names
     assert VietParaDiffInput.__annotations__["style_condition"] == "StyleCondition"
     assert StyleCondition is not None
-

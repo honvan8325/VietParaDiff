@@ -23,7 +23,6 @@ class VietParaDiffInput:
     timesteps: Tensor
     graphemes: GraphemeBatch
     style_condition: StyleCondition
-    line_slot_masks: Tensor
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,19 +317,38 @@ class ConditionedLevel(nn.Module):
         return features, shape_norms, tone_norms, film_norms
 
 
-class InterLineStyleHarmonizer(nn.Module):
-    """Transformer chỉ trao đổi masked line statistics ở deepest feature."""
+class TextGuidedInterLineHarmonizer(nn.Module):
+    """Learn line-aware spatial alignment without boxes or hard masks."""
 
     def __init__(self, channels: int, config: ParagraphUNetConfig) -> None:
         super().__init__()
+        self.channels = channels
+        self.context_dim = config.context_dim
         self.max_lines = config.max_lines
-        self.statistics_projection = nn.Linear(2 * channels, config.harmonizer_dim)
-        self.style_projection = nn.Linear(config.context_dim, config.harmonizer_dim)
+        self.dim = config.harmonizer_dim
+        self.heads = config.harmonizer_heads
+        self.text_projection = nn.Linear(
+            config.context_dim,
+            self.dim,
+        )
+        self.style_projection = nn.Linear(
+            config.context_dim,
+            self.dim,
+        )
+        self.spatial_projection = nn.Linear(channels, self.dim)
         self.line_position = nn.Parameter(
-            torch.randn(config.max_lines, config.harmonizer_dim) * 0.02
+            torch.randn(config.max_lines, self.dim) * 0.02
+        )
+        self.line_query_norm = nn.LayerNorm(self.dim)
+        self.spatial_key_norm = nn.LayerNorm(self.dim)
+        self.line_to_spatial = nn.MultiheadAttention(
+            self.dim,
+            config.harmonizer_heads,
+            dropout=config.dropout,
+            batch_first=True,
         )
         layer = nn.TransformerEncoderLayer(
-            config.harmonizer_dim,
+            self.dim,
             config.harmonizer_heads,
             2048,
             config.dropout,
@@ -338,62 +356,278 @@ class InterLineStyleHarmonizer(nn.Module):
             batch_first=True,
             norm_first=True,
         )
-        self.transformer = nn.TransformerEncoder(
-            layer, config.harmonizer_layers, enable_nested_tensor=False
+        self.line_transformer = nn.TransformerEncoder(
+            layer,
+            config.harmonizer_layers,
+            enable_nested_tensor=False,
         )
-        self.output_projection = nn.Linear(config.harmonizer_dim, 2 * channels)
+        self.spatial_query_norm = nn.LayerNorm(self.dim)
+        self.line_key_norm = nn.LayerNorm(self.dim)
+        self.spatial_to_line = nn.MultiheadAttention(
+            self.dim,
+            config.harmonizer_heads,
+            dropout=config.dropout,
+            batch_first=True,
+        )
+        self.output_projection = nn.Linear(self.dim, channels)
         nn.init.zeros_(self.output_projection.weight)
         nn.init.zeros_(self.output_projection.bias)
+        self.vertical_prior_raw = nn.Parameter(torch.tensor(-2.25))
 
-    def forward(
-        self, features: Tensor, line_masks: Tensor, global_style: Tensor
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        masks = F.interpolate(
-            line_masks.float(), size=features.shape[-2:], mode="nearest"
+    def _build_line_queries(
+        self,
+        grapheme: GraphemeCondition,
+        global_style: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        attention = grapheme.attention_mask
+        line_ids = grapheme.line_ids
+        if attention.ndim != 2 or line_ids.shape != attention.shape:
+            raise ValueError(
+                "grapheme attention_mask và line_ids phải có shape [B,N]."
+            )
+        if attention.dtype != torch.bool:
+            raise TypeError("grapheme.attention_mask phải là torch.bool.")
+        if line_ids.dtype != torch.long:
+            raise TypeError("grapheme.line_ids phải là torch.long.")
+        batch, length = attention.shape
+        expected_context = (batch, length, self.context_dim)
+        base_context = grapheme.base_context
+        if base_context.shape != expected_context:
+            raise ValueError(
+                "base_context phải có shape "
+                f"{expected_context}, nhận {tuple(base_context.shape)}."
+            )
+        if global_style.shape != (batch, self.context_dim):
+            raise ValueError(
+                "global_style phải có shape "
+                f"[{batch},{self.context_dim}]."
+            )
+        if not attention.any(dim=1).all():
+            raise ValueError("Mỗi paragraph phải có ít nhất một active token.")
+        active_ids = line_ids[attention]
+        if active_ids.min() < 0 or active_ids.max() >= self.max_lines:
+            raise ValueError("Active line IDs vượt max_lines.")
+
+        token_context = self.text_projection(base_context)
+        line_weights = F.one_hot(
+            line_ids.clamp(0, self.max_lines - 1),
+            num_classes=self.max_lines,
+        ).to(token_context.dtype)
+        line_weights = line_weights * attention[:, :, None].to(
+            token_context.dtype
         )
-        areas = masks.sum((-2, -1))
-        active = areas > 1e-6
-        selected = torch.nonzero(active.sum(dim=1) > 1, as_tuple=False).flatten()
-        all_tokens = features.new_zeros(
-            features.shape[0], self.max_lines, self.statistics_projection.out_features
+        counts = line_weights.sum(dim=1)
+        pooled = torch.einsum(
+            "bnl,bnd->bld",
+            line_weights,
+            token_context,
         )
-        if selected.numel() == 0:
-            return features, all_tokens, features.sum() * 0.0
-        selected_features = features.index_select(0, selected)
-        selected_masks = masks.index_select(0, selected)
-        selected_active = active.index_select(0, selected)
-        selected_areas = selected_masks.sum((-2, -1)).clamp_min(1e-6)
-        values = selected_features.float()
-        weights = selected_masks.float()
-        means = torch.einsum("bchw,blhw->blc", values, weights)
-        means = means / selected_areas[:, :, None]
-        centered = values[:, None] - means[:, :, :, None, None]
-        variances = (
-            centered.square() * weights[:, :, None]
-        ).sum((-2, -1)) / selected_areas[:, :, None]
-        tokens = self.statistics_projection(
-            torch.cat((means, torch.sqrt(variances + 1e-6)), dim=-1).to(
-                self.statistics_projection.weight.dtype
+        pooled = pooled / counts.clamp_min(1.0)[:, :, None]
+        masked_line_ids = torch.where(
+            attention,
+            line_ids,
+            torch.full_like(line_ids, -1),
+        )
+        line_counts = masked_line_ids.amax(dim=1) + 1
+        if (line_counts <= 0).any():
+            raise ValueError("Mỗi paragraph phải có ít nhất một dòng.")
+        positions = torch.arange(
+            self.max_lines,
+            device=line_ids.device,
+        )
+        line_valid = positions[None] < line_counts[:, None]
+        queries = (
+            pooled
+            + self.style_projection(global_style)[:, None]
+            + self.line_position[None].to(pooled.dtype)
+        )
+        queries = queries.masked_fill(
+            ~line_valid[:, :, None],
+            0.0,
+        )
+        return queries, line_valid
+
+    def _vertical_prior(
+        self,
+        line_valid: Tensor,
+        height: int,
+        width: int,
+        *,
+        dtype: torch.dtype,
+    ) -> Tensor:
+        if height <= 0 or width <= 0:
+            raise ValueError("Spatial height và width phải dương.")
+        batch = line_valid.shape[0]
+        line_counts = line_valid.sum(dim=1).clamp_min(1)
+        line_indices = torch.arange(
+            self.max_lines,
+            device=line_valid.device,
+            dtype=torch.float32,
+        )
+        centers = (
+            line_indices[None] + 0.5
+        ) / line_counts[:, None].to(torch.float32)
+        rows = (
+            torch.arange(
+                height,
+                device=line_valid.device,
+                dtype=torch.float32,
+            )
+            + 0.5
+        ) / height
+        spatial_y = (
+            rows[:, None]
+            .expand(height, width)
+            .reshape(-1)
+        )
+        strength = F.softplus(self.vertical_prior_raw.float())
+        bias = -strength * (
+            centers[:, :, None] - spatial_y[None, None, :]
+        ).square()
+        bias = bias.masked_fill(
+            ~line_valid[:, :, None],
+            -1e4,
+        )
+        expected = (batch, self.max_lines, height * width)
+        if bias.shape != expected:
+            raise RuntimeError(
+                f"Vertical prior phải có shape {expected}, "
+                f"nhận {tuple(bias.shape)}."
+            )
+        return bias.to(dtype)
+
+    def _attention_mask(self, bias: Tensor) -> Tensor:
+        if bias.ndim != 3:
+            raise ValueError("Attention bias phải có shape [B,Q,K].")
+        batch, query_length, key_length = bias.shape
+        return (
+            bias[:, None]
+            .expand(
+                batch,
+                self.heads,
+                query_length,
+                key_length,
+            )
+            .reshape(
+                batch * self.heads,
+                query_length,
+                key_length,
             )
         )
-        tokens = (
-            tokens
-            + self.style_projection(global_style.index_select(0, selected))[:, None]
-            + self.line_position[None].to(tokens.dtype)
+
+    def forward(
+        self,
+        features: Tensor,
+        grapheme: GraphemeCondition,
+        global_style: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        if features.ndim != 4:
+            raise ValueError("features phải có shape [B,C,H,W].")
+        if not features.is_floating_point() or not torch.isfinite(
+            features
+        ).all():
+            raise ValueError("features phải là floating tensor hữu hạn.")
+        batch, channels, height, width = features.shape
+        if channels != self.channels:
+            raise ValueError(
+                f"Expected {self.channels} channels, nhận {channels}."
+            )
+        if global_style.shape != (batch, self.context_dim):
+            raise ValueError(
+                "global_style phải có shape "
+                f"[{batch},{self.context_dim}]."
+            )
+        if global_style.device != features.device:
+            raise ValueError("global_style và features phải cùng device.")
+        line_queries, line_valid = self._build_line_queries(
+            grapheme,
+            global_style,
         )
-        tokens = tokens.masked_fill(~selected_active[:, :, None], 0.0)
-        tokens = self.transformer(tokens, src_key_padding_mask=~selected_active)
-        tokens = tokens.masked_fill(~selected_active[:, :, None], 0.0)
-        scale, shift = self.output_projection(tokens).chunk(2, dim=-1)
-        scale, shift = scale.to(features.dtype), shift.to(features.dtype)
-        delta = (
-            scale[:, :, :, None, None] * selected_features[:, None]
-            + shift[:, :, :, None, None]
-        ) * selected_masks[:, :, None].to(features.dtype)
-        selected_delta = delta.sum(dim=1)
-        all_delta = torch.zeros_like(features).index_copy(0, selected, selected_delta)
-        all_tokens = all_tokens.index_copy(0, selected, tokens.to(all_tokens.dtype))
-        return features + all_delta, all_tokens, all_delta.float().square().mean().sqrt()
+        if line_queries.device != features.device:
+            raise ValueError("grapheme condition và features phải cùng device.")
+        selected = torch.nonzero(
+            line_valid.sum(dim=1) > 1,
+            as_tuple=False,
+        ).flatten()
+        all_tokens = line_queries
+        if selected.numel() == 0:
+            return features, all_tokens, features.sum() * 0.0
+
+        selected_features = features.index_select(0, selected)
+        selected_queries = line_queries.index_select(0, selected)
+        selected_valid = line_valid.index_select(0, selected)
+        spatial = (
+            selected_features
+            .flatten(2)
+            .transpose(1, 2)
+        )
+        spatial = self.spatial_projection(spatial)
+        prior = self._vertical_prior(
+            selected_valid,
+            height,
+            width,
+            dtype=spatial.dtype,
+        )
+        normalized_spatial = self.spatial_key_norm(spatial)
+        attended_lines, _ = self.line_to_spatial(
+            self.line_query_norm(selected_queries),
+            normalized_spatial,
+            normalized_spatial,
+            attn_mask=self._attention_mask(prior),
+            need_weights=False,
+        )
+        line_tokens = selected_queries + attended_lines
+        line_tokens = line_tokens.masked_fill(
+            ~selected_valid[:, :, None],
+            0.0,
+        )
+        line_tokens = self.line_transformer(
+            line_tokens,
+            src_key_padding_mask=~selected_valid,
+        )
+        line_tokens = line_tokens.masked_fill(
+            ~selected_valid[:, :, None],
+            0.0,
+        )
+        reverse_prior = prior.transpose(1, 2)
+        reverse_prior = reverse_prior.masked_fill(
+            ~selected_valid[:, None, :],
+            -1e4,
+        )
+        spatial_delta, _ = self.spatial_to_line(
+            self.spatial_query_norm(spatial),
+            self.line_key_norm(line_tokens),
+            self.line_key_norm(line_tokens),
+            attn_mask=self._attention_mask(reverse_prior),
+            need_weights=False,
+        )
+        spatial_delta = self.output_projection(spatial_delta)
+        spatial_delta = (
+            spatial_delta
+            .transpose(1, 2)
+            .reshape(
+                selected_features.shape[0],
+                channels,
+                height,
+                width,
+            )
+            .to(features.dtype)
+        )
+        updated_selected = selected_features + spatial_delta
+        updated = features.index_copy(
+            0,
+            selected,
+            updated_selected,
+        )
+        all_tokens = all_tokens.index_copy(
+            0,
+            selected,
+            line_tokens.to(all_tokens.dtype),
+        )
+        delta_norm = (
+            spatial_delta.float().square().mean().sqrt()
+        )
+        return updated, all_tokens, delta_norm
 
 
 class ParagraphUNet(nn.Module):
@@ -412,7 +646,7 @@ class ParagraphUNet(nn.Module):
         self.encoder_low = ConditionedLevel(low, config, attention_mode="axial", use_shape=False, use_tone=False)
         self.down_low = nn.Conv2d(low, deep, 3, stride=2, padding=1)
         self.encoder_deep = ConditionedLevel(deep, config, attention_mode="global", use_shape=False, use_tone=False)
-        self.harmonizer = InterLineStyleHarmonizer(deep, config)
+        self.harmonizer = TextGuidedInterLineHarmonizer(deep, config)
         self.middle1 = UNetResBlock(deep, deep, config)
         self.middle_attention = SpatialTransformer(deep, config, "global")
         self.middle2 = UNetResBlock(deep, deep, config)
@@ -436,7 +670,6 @@ class ParagraphUNet(nn.Module):
         timesteps: Tensor,
         grapheme: GraphemeCondition,
         style: StyleCondition,
-        line_slot_masks: Tensor,
     ) -> tuple[Tensor, Tensor, dict[str, Tensor]]:
         if noisy_latents.ndim != 4 or noisy_latents.shape[1] != 4:
             raise ValueError(f"noisy_latents phải có shape [B,4,H,W], nhận {tuple(noisy_latents.shape)}.")
@@ -451,20 +684,6 @@ class ParagraphUNet(nn.Module):
             raise ValueError(f"timesteps phải có shape [{batch}].")
         if timesteps.device != noisy_latents.device:
             raise ValueError("timesteps và noisy_latents phải cùng device.")
-        expected_masks = (batch, self.config.max_lines, height, width)
-        if line_slot_masks.shape != expected_masks:
-            raise ValueError(
-                f"line_slot_masks phải có shape {expected_masks}, "
-                f"nhận {tuple(line_slot_masks.shape)}."
-            )
-        masks = line_slot_masks.float()
-        if not torch.isfinite(masks).all() or masks.min() < 0 or masks.max() > 1:
-            raise ValueError("line_slot_masks phải hữu hạn trong [0,1].")
-        if (masks.sum(dim=1) > 1.0001).any():
-            raise ValueError("Các line-slot masks không được overlap.")
-        if not (masks.sum((-2, -1)) > 0).any(dim=1).all():
-            raise ValueError("Mỗi paragraph phải có ít nhất một active line mask.")
-
         timestep = self.timestep_embedding(timesteps)
         shape_norms: list[Tensor] = []
         tone_norms: list[Tensor] = []
@@ -500,7 +719,11 @@ class ParagraphUNet(nn.Module):
         shape_norms.extend(shape)
         tone_norms.extend(tone)
         film_norms.extend(film)
-        deep, line_tokens, harmonizer_norm = self.harmonizer(deep, masks, style.global_style)
+        deep, line_tokens, harmonizer_norm = self.harmonizer(
+            deep,
+            grapheme,
+            style.global_style,
+        )
         deep_skip = deep
 
         deep, norm = self.middle1(deep, timestep, style.global_style)
@@ -572,7 +795,7 @@ class VietParaDiff(nn.Module):
 
     Reference style phải được tạo trước bằng :meth:`encode_reference`. Caller
     dùng ``style.layout_scales`` để chạy ``ParagraphFormatter``, rồi truyền
-    chính ``StyleCondition`` đó cùng grapheme IDs và line-slot masks vào
+    chính ``StyleCondition`` đó cùng grapheme IDs vào
     :meth:`forward`. Contract hai bước này tránh encode reference hai lần và
     đảm bảo formatter thực sự được reference-calibrated.
     """
@@ -612,7 +835,6 @@ class VietParaDiff(nn.Module):
             batch.timesteps,
             grapheme,
             style,
-            batch.line_slot_masks,
         )
         return VietParaDiffOutput(
             velocity, grapheme, style, line_tokens, diagnostics

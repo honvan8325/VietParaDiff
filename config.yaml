@@ -1,0 +1,45 @@
+seed: 42
+
+device: auto
+precision: auto
+
+data:
+  train_manifest: data/splits/autokl/train_paragraphs.jsonl
+  test_manifest: data/splits/autokl/test_paragraphs.jsonl
+  image_root: .
+  num_workers: 4
+  batch_size: 1
+  gradient_accumulation_steps: 8
+
+autokl:
+  epochs: 50
+  sample_posterior_train: true
+  sample_posterior_eval: false
+
+optimizer:
+  name: adamw
+  learning_rate: 0.0002
+  betas: [0.9, 0.99]
+  weight_decay: 0.0001
+  gradient_clip_norm: 1.0
+
+loss:
+  foreground_weight: 4.0
+  edge_weight: 0.1
+  kl_max_weight: 0.0001
+  kl_warmup_steps: 10000
+
+logging:
+  log_every_steps: 20
+  image_every_steps: 500
+  tensorboard: true
+  wandb: true
+  wandb_project: vietparadiff-autokl
+  wandb_entity: null
+  wandb_mode: offline
+  run_name: null
+
+checkpoint:
+  output_dir: outputs/autokl
+  save_last: true
+  save_best: true

@@ -286,6 +286,76 @@ The manifests retain all eligible records. The HTR line/word ratio and the
 generator real/synthetic ratio belong to the later training sampler; the split
 builder does not downsample records to enforce those ratios.
 
+## Training data layer
+
+`src/data/training.py` converts split records into the exact tensors consumed
+by the three training stages:
+
+- `ParagraphImageProcessor` produces aspect-preserved grayscale paragraph
+  canvases `[1, H_bucket, 1024]`.
+- `HTRImageProcessor` produces one-line images `[1, 64, W]` and their valid
+  widths.
+- `ReferenceImageProcessor` produces style references
+  `[1, 256, W_pad]` with boolean valid masks, where `W_pad <= 1536` and is a
+  multiple of 32.
+- `AutoKLDataset`, `HTRDataset`, and `VietParaDiffDataset` load the respective
+  stage manifests without performing training.
+- `HeightBucketBatchSampler` prevents paragraph heights from being mixed in a
+  batch. `WidthBucketBatchSampler` reduces HTR right-padding.
+- `collate_autokl`, `collate_htr`, and `VietParaDiffCollator` construct padded
+  batches and factorized text tensors.
+
+For generator data, the formatter alone selects the output height used at
+both train and inference. The target image is isotropically fit into that
+exact canvas; image geometry never increases the formatter bucket.
+`VietParaDiffDataset.set_epoch(epoch)` and the dataset seed select each train
+reference through a stable hash of `seed:epoch:target_id`, so worker count,
+resume, and debugging reads do not change the selected reference.
+
+Build the four HTR CTC vocabularies only from the training manifests:
+
+```python
+from pathlib import Path
+from src.data import HTRVocabulary
+
+vocabulary = HTRVocabulary.build_from_manifests(
+    (
+        Path("data/splits/htr/train_lines.jsonl"),
+        Path("data/splits/htr/train_words.jsonl"),
+    )
+)
+vocabulary.save(Path("outputs/htr_vocabulary.json"))
+```
+
+Test transcripts may map unseen symbols to `<unk>`, but never expand these
+training vocabularies.
+
+Render processed real samples for manual inspection before training:
+
+```bash
+uv run python scripts/check_training_data.py
+```
+
+The command validates real collated batches and writes:
+
+```text
+outputs/data_check/
+├── autokl_batch.png
+├── htr_lines.png
+├── htr_words.png
+├── style_references.png
+├── vietparadiff_pairs.png
+└── vietparadiff_canonical_slots.png
+```
+
+Canonical slots describe the layout requested for generated images and are
+reserved for the later generated-image HTR auxiliary path. They are not
+treated as regions of real target images and are never passed to the
+diffusion U-Net. Inter-line alignment inside the U-Net is learned from
+physical line IDs using text-guided spatial cross-attention with a weak
+monotonic vertical prior; it does not use line boxes, line detection, or
+pseudo masks.
+
 ## Dataset-specific behavior
 
 ### CVL

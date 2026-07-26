@@ -24,6 +24,7 @@ from .text import (
 )
 from .vietparadiff import (
     ParagraphUNet,
+    TextGuidedInterLineHarmonizer,
     VietParaDiff,
     VietParaDiffInput,
     VietParaDiffOutput,
@@ -56,5 +57,6 @@ __all__ = [
     "VietParaDiffInput",
     "VietParaDiffOutput",
     "ParagraphUNet",
+    "TextGuidedInterLineHarmonizer",
     "VietParaDiff",
 ]
